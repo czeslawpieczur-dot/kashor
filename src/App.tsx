@@ -14,8 +14,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.3.1';
-const BUILD_TIME = '2026-10-06 23:55';
+const APP_VERSION = 'v2.3.2';
+const BUILD_TIME = '2026-10-06 23:58';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -31,7 +31,7 @@ const translateAuthError = (message: string): string => {
   if (msg.includes('user already registered') || msg.includes('already exists')) return 'Konto o tym adresie e-mail już istnieje.';
   if (msg.includes('password should be at least')) return 'Hasło musi mieć co najmniej 6 znaków.';
   if (msg.includes('unable to validate email address')) return 'Wprowadź poprawny adres e-mail.';
-  if (msg.includes('email not confirmed')) return 'Adres e-mail not confirmed.';
+  if (msg.includes('email not confirmed')) return 'Adres e-mail nie został jeszcze potwierdzony.';
   if (msg.includes('rate limit')) return 'Zbyt wiele prób. Spróbuj ponownie za chwilę.';
   return 'Wystąpił błąd autoryzacji: ' + message;
 };
@@ -305,7 +305,6 @@ export default function App() {
     setLoading(false);
   };
 
-  // KRYTYCZNA ZMIANA: Bezpieczne pobieranie cen po kolei (omija limity anty-DDoS Yahoo/AllOrigins)
   const refreshPrices = async () => {
     if (holdings.length === 0) return;
     setLoading(true);
@@ -313,35 +312,31 @@ export default function App() {
 
     await refreshExchangeRates();
 
-    // Wyciągamy unikalne tickery z całego portfela
     const uniqueTickers = Array.from(new Set(holdings.map(h => h.ticker)));
     const pricesMap: Record<string, any> = {};
 
-    // Pobieramy sekwencyjnie z 250ms pauzą, aby nie zablokowano nas za spam
-    for (const ticker of uniqueTickers) {
-      const fallbackName = holdings.find(h => h.ticker === ticker)?.name;
-      const stockData = await fetchStockPriceAndName(ticker, fallbackName);
+    for (const tickerCode of uniqueTickers) {
+      const fallbackName = holdings.find(h => h.ticker === tickerCode)?.name;
+      const stockData = await fetchStockPriceAndName(tickerCode, fallbackName);
       
-      pricesMap[ticker] = stockData;
+      pricesMap[tickerCode] = stockData;
       if (stockData.price !== null) successCount++;
       
-      // Delikatne opóźnienie
       await new Promise(resolve => setTimeout(resolve, 250));
     }
 
     const updatedHoldings = holdings.map((item) => {
       const stockData = pricesMap[item.ticker];
-      const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
+      const newPrice = stockData && stockData.price !== null ? stockData.price : item.currentPrice;
 
       return {
         ...item,
         currentPrice: newPrice,
-        currency: stockData.currency || item.currency,
+        currency: (stockData && stockData.currency) || item.currency,
       };
     });
 
     if (user) {
-      // Zapisujemy nowe ceny w bazie po kolei
       for (const item of updatedHoldings) {
         await supabase
           .from('holdings')
@@ -398,6 +393,13 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const shouldClear = window.confirm(
+      'Czy chcesz WYCZYŚCIĆ obecny portfel przed importem?\n\n' +
+      '[OK] = Skasuj wszystko i wgraj tylko plik\n' +
+      '[Anuluj] = DOPISZ nowe pozycje do istniejącego portfela'
+    );
+
     setLoading(true);
 
     Papa.parse(file, {
@@ -476,6 +478,10 @@ export default function App() {
 
           if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
 
+          let inferredCurrency = 'PLN';
+          if (rawTicker.endsWith('.DE')) inferredCurrency = 'EUR';
+          if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.US') || !rawTicker.includes('.')) inferredCurrency = 'USD';
+
           if (!apiCache[rawTicker]) {
             try {
               const stockData = await fetchStockPriceAndName(rawTicker);
@@ -488,9 +494,8 @@ export default function App() {
                 name: resolvedName || rawTicker,
                 type: stockData.type,
                 price: stockData.price !== null ? stockData.price : price,
-                currency: stockData.currency
+                currency: stockData.currency !== 'PLN' ? stockData.currency : inferredCurrency
               };
-              // KRYTYCZNA ZMIANA: Pauza przy imporcie zapobiegająca blokadzie API
               await new Promise(resolve => setTimeout(resolve, 250));
             } catch (err) {
               const meta = getMetaBySymbol(rawTicker);
@@ -498,7 +503,7 @@ export default function App() {
                 name: meta?.name || rawTicker,
                 type: meta?.type || 'stock',
                 price: price,
-                currency: meta?.currency || 'PLN'
+                currency: meta?.currency || inferredCurrency
               };
             }
           }
@@ -514,7 +519,7 @@ export default function App() {
             shares: volume,
             buyPrice: price,
             currentPrice: cachedData.price || price,
-            currency: cachedData.currency || 'PLN',
+            currency: cachedData.currency,
             purchaseDate: parsedDate,
           });
         }
@@ -527,7 +532,9 @@ export default function App() {
         }
 
         if (user) {
-          await supabase.from('holdings').delete().eq('user_id', user.id);
+          if (shouldClear) {
+            await supabase.from('holdings').delete().eq('user_id', user.id);
+          }
           
           const supabaseRows = importedHoldings.map(h => ({
             id: h.id,
@@ -554,10 +561,14 @@ export default function App() {
           
           await fetchHoldingsFromSupabase();
         } else {
-          setHoldings(importedHoldings);
+          if (shouldClear) {
+            setHoldings(importedHoldings);
+          } else {
+            setHoldings(prev => [...prev, ...importedHoldings]);
+          }
         }
 
-        alert(`Sukces! Poprawnie zaimportowano ${importedHoldings.length} pojedynczych transakcji z XTB.`);
+        alert(`Sukces! Zaimportowano ${importedHoldings.length} pojedynczych transakcji z XTB.`);
         setLoading(false);
         e.target.value = '';
       }
@@ -648,7 +659,6 @@ export default function App() {
     }));
   }, [holdings]);
 
-  // KRYTYCZNA ZMIANA: Wykres Alokacji pobiera teraz dane ZGRUPOWANE (tylko główne wiersze)
   const rawChartData = groupedHoldingsList.map((g) => {
     const valuePLN = getPLNValue(g.totalShares * g.currentPrice, g.currency);
     return {
