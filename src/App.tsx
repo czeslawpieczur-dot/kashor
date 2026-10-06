@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon } from 'lucide-react';
+import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import Papa from 'papaparse';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.3.0';
-const BUILD_TIME = '2026-10-06 15:25';
+const APP_VERSION = 'v1.4.0';
+const BUILD_TIME = '2026-10-06 15:35';
 
 interface Holding {
   id: string;
@@ -17,6 +17,9 @@ interface Holding {
   currentPrice: number;
   currency: string;
 }
+
+type SortField = 'ticker' | 'shares' | 'valuePLN' | 'profitLossPLN';
+type SortOrder = 'asc' | 'desc';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -38,12 +41,19 @@ export default function App() {
 
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [usdPln, setUsdPln] = useState<number>(3.88);
+  const [eurPln, setEurPln] = useState<number>(4.28);
+  
   const [ticker, setTicker] = useState('');
   const [shares, setShares] = useState('');
   const [buyPrice, setBuyPrice] = useState('');
+  const [currency, setCurrency] = useState('PLN');
   const [loading, setLoading] = useState(false);
 
-  // Słownik zapamiętanych nazw spółek
+  // Stan sortowania tabeli
+  const [sortField, setSortField] = useState<SortField>('valuePLN');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+
+  // Slownik nazw spolek w pamieci podręcznej
   const [companyNames, setCompanyNames] = useState<{ [ticker: string]: string }>(() => {
     try {
       const saved = localStorage.getItem('kashor_names');
@@ -118,26 +128,29 @@ export default function App() {
         shares: Number(item.shares),
         buyPrice: Number(item.buy_price),
         currentPrice: Number(item.current_price),
-        currency: item.currency,
+        currency: item.currency || 'PLN',
       }));
       setHoldings(formatted);
     }
     setLoading(false);
   };
 
-  const fetchUsdRateFromNBP = async () => {
+  const fetchExchangeRates = async () => {
     try {
-      const response = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/usd/?format=json');
-      const data = await response.json();
-      const rate = data?.rates?.[0]?.mid;
-      if (rate) setUsdPln(rate);
+      const usdRes = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/usd/?format=json');
+      const usdData = await usdRes.json();
+      if (usdData?.rates?.[0]?.mid) setUsdPln(usdData.rates[0].mid);
+
+      const eurRes = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/eur/?format=json');
+      const eurData = await eurRes.json();
+      if (eurData?.rates?.[0]?.mid) setEurPln(eurData.rates[0].mid);
     } catch (error) {
-      console.error('Błąd NBP:', error);
+      console.error('Błąd pobierania kursów walut NBP:', error);
     }
   };
 
   useEffect(() => {
-    fetchUsdRateFromNBP();
+    fetchExchangeRates();
   }, []);
 
   const fetchStockData = async (symbol: string) => {
@@ -156,13 +169,14 @@ export default function App() {
 
       const price = meta?.regularMarketPrice;
       const fetchedName = meta?.shortName || meta?.longName || cleanSymbol;
-      let currency = meta?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
+      let detectedCurrency = meta?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
+      if (detectedCurrency === 'GBp') detectedCurrency = 'GBP';
 
       if (fetchedName && fetchedName !== cleanSymbol) {
         setCompanyNames(prev => ({ ...prev, [cleanSymbol]: fetchedName }));
       }
 
-      return { price: price ? parseFloat(price) : null, name: fetchedName, currency };
+      return { price: price ? parseFloat(price) : null, name: fetchedName, currency: detectedCurrency };
     } catch (error) {
       return { price: null, name: symbol, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
     }
@@ -212,6 +226,8 @@ export default function App() {
     const stockData = await fetchStockData(cleanTicker);
     const newId = Date.now().toString();
 
+    const selectedCurrency = currency || stockData.currency;
+
     const newHoldingObj: Holding = {
       id: newId,
       ticker: cleanTicker,
@@ -219,7 +235,7 @@ export default function App() {
       shares: numShares,
       buyPrice: numPrice,
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
-      currency: stockData.currency,
+      currency: selectedCurrency,
     };
 
     if (user) {
@@ -230,7 +246,7 @@ export default function App() {
         shares: numShares,
         buy_price: numPrice,
         current_price: newHoldingObj.currentPrice,
-        currency: stockData.currency,
+        currency: selectedCurrency,
       }]);
 
       if (error) alert('Błąd zapisu w bazie: ' + error.message);
@@ -333,7 +349,7 @@ export default function App() {
             shares: parseFloat(data.totalShares.toFixed(4)),
             buyPrice: parseFloat(avgBuyPrice.toFixed(2)),
             currentPrice: parseFloat(data.latestCurrentPrice.toFixed(2)),
-            currency: symbol.endsWith('.WA') ? 'PLN' : 'USD',
+            currency: stockData.currency,
           });
 
           if (user) {
@@ -344,7 +360,7 @@ export default function App() {
               shares: parseFloat(data.totalShares.toFixed(4)),
               buy_price: parseFloat(avgBuyPrice.toFixed(2)),
               current_price: parseFloat(data.latestCurrentPrice.toFixed(2)),
-              currency: symbol.endsWith('.WA') ? 'PLN' : 'USD',
+              currency: stockData.currency,
             });
           }
         }
@@ -385,7 +401,7 @@ export default function App() {
   const refreshPrices = async () => {
     if (holdings.length === 0) return;
     setLoading(true);
-    await fetchUsdRateFromNBP();
+    await fetchExchangeRates();
 
     const updatedHoldings = await Promise.all(
       holdings.map(async (item) => {
@@ -413,8 +429,9 @@ export default function App() {
     setLoading(false);
   };
 
-  const getPLNValue = (amount: number, currency: string) => {
-    if (currency === 'USD') return amount * (usdPln || 3.88);
+  const getPLNValue = (amount: number, curr: string) => {
+    if (curr === 'USD') return amount * (usdPln || 3.88);
+    if (curr === 'EUR') return amount * (eurPln || 4.28);
     return amount;
   };
 
@@ -423,6 +440,7 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
+  // DANE WYKRESU
   const rawChartData = holdings.map((h) => {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
     return {
@@ -432,6 +450,32 @@ export default function App() {
       percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
     };
   }).sort((a, b) => b.value - a.value);
+
+  // OBSŁUGA SORTOWANIA TABELI
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('desc');
+    }
+  };
+
+  const sortedHoldings = [...holdings].sort((a, b) => {
+    const aValuePLN = getPLNValue(a.shares * a.currentPrice, a.currency);
+    const bValuePLN = getPLNValue(b.shares * b.currentPrice, b.currency);
+    
+    const aProfitPLN = aValuePLN - getPLNValue(a.shares * a.buyPrice, a.currency);
+    const bProfitPLN = bValuePLN - getPLNValue(b.shares * b.buyPrice, b.currency);
+
+    let comp = 0;
+    if (sortField === 'ticker') comp = a.ticker.localeCompare(b.ticker);
+    else if (sortField === 'shares') comp = a.shares - b.shares;
+    else if (sortField === 'valuePLN') comp = aValuePLN - bValuePLN;
+    else if (sortField === 'profitLossPLN') comp = aProfitPLN - bProfitPLN;
+
+    return sortOrder === 'asc' ? comp : -comp;
+  });
 
   if (authLoading) {
     return (
@@ -546,7 +590,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', width: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
       
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%', padding: '24px 16px' }}>
+      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%', padding: '24px 16px', boxSizing: 'border-box' }}>
         
         {/* NAGŁÓWEK */}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', borderBottom: '1px solid #1e293b', paddingBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
@@ -556,9 +600,10 @@ export default function App() {
             </div>
             <div>
               <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', letterSpacing: '-0.5px', color: '#fff' }}>Kashor</h1>
-              <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <span>Status: <strong style={{ color: user ? '#22c55e' : '#eab308' }}>{user ? `Zalogowany (${user.email})` : 'Tryb Lokalny (Gość)'}</strong></span>
                 <span>USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln ? `${usdPln.toFixed(4)} zł` : '...'}</strong></span>
+                <span>EUR/PLN: <strong style={{ color: '#a855f7' }}>{eurPln ? `${eurPln.toFixed(4)} zł` : '...'}</strong></span>
               </p>
             </div>
           </div>
@@ -668,7 +713,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* MODUŁ WYKRESU ALOKACJI DWRUKOLUMNOWY */}
+        {/* MODUŁ WYKRESU ALOKACJI */}
         {holdings.length > 0 && (
           <div style={{ backgroundColor: '#151d30', padding: '24px', borderRadius: '16px', marginBottom: '28px', border: '1px solid #1e293b' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
@@ -677,8 +722,6 @@ export default function App() {
             </div>
             
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', alignItems: 'center' }}>
-              
-              {/* WYKRES KOŁOWY */}
               <div style={{ height: '260px', width: '100%' }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -706,8 +749,7 @@ export default function App() {
                 </ResponsiveContainer>
               </div>
 
-              {/* DEDYKOWANA, DOWOLNIE PRZEWIJANA LEGENDA Z PEŁNYMI NAZWAMI */}
-              <div style={{ maxHeight: '250px', overflowY: 'auto', paddingRight: '8px' }}>
+              <div style={{ maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {rawChartData.map((item, index) => (
                     <div key={item.ticker} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#0b0f19', border: '1px solid #1e293b', fontSize: '13px' }}>
@@ -726,26 +768,25 @@ export default function App() {
                   ))}
                 </div>
               </div>
-
             </div>
           </div>
         )}
 
-        {/* FORMULARZ DODAWANIA AKCJI */}
-        <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b' }}>
+        {/* FORMULARZ DODAWANIA AKCJI Z ZMIANĄ WALUTY */}
+        <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center' }}>
           <input
             type="text"
             placeholder="Ticker (np. PKO.WA, AAPL)"
             value={ticker}
             onChange={(e) => setTicker(e.target.value)}
-            style={{ flex: 1, minWidth: '160px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
+            style={{ flex: 2, minWidth: '150px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
           />
           <input
             type="number"
             placeholder="Liczba akcji"
             value={shares}
             onChange={(e) => setShares(e.target.value)}
-            style={{ flex: 1, minWidth: '120px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
+            style={{ flex: 1, minWidth: '110px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
           />
           <input
             type="number"
@@ -753,14 +794,24 @@ export default function App() {
             placeholder="Cena zakupu"
             value={buyPrice}
             onChange={(e) => setBuyPrice(e.target.value)}
-            style={{ flex: 1, minWidth: '160px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
+            style={{ flex: 1.5, minWidth: '130px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
           />
+          <select
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#38bdf8', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
+          >
+            <option value="PLN">PLN (zł)</option>
+            <option value="USD">USD ($)</option>
+            <option value="EUR">EUR (€)</option>
+          </select>
+
           <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Plus size={18} /> Dodaj Akcję
           </button>
         </form>
 
-        {/* TABELA POSIADANYCH AKCJI */}
+        {/* TABELA POSIADANYCH AKCJI Z SORTOWANIEM */}
         <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
@@ -771,18 +822,38 @@ export default function App() {
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '650px' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#0b0f19', color: '#64748b', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                    <th style={{ padding: '14px 18px' }}>Symbol / Spółka</th>
-                    <th style={{ padding: '14px 18px' }}>Ilość</th>
+                    <th onClick={() => handleSort('ticker')} style={{ padding: '14px 18px', cursor: 'pointer', userSelect: 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Symbol / Spółka
+                        {sortField === 'ticker' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
+                      </div>
+                    </th>
+                    <th onClick={() => handleSort('shares')} style={{ padding: '14px 18px', cursor: 'pointer', userSelect: 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Liczba
+                        {sortField === 'shares' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
+                      </div>
+                    </th>
                     <th style={{ padding: '14px 18px' }}>Śr. cena zakupu</th>
                     <th style={{ padding: '14px 18px' }}>Aktualny kurs</th>
-                    <th style={{ padding: '14px 18px' }}>Wartość (PLN)</th>
-                    <th style={{ padding: '14px 18px' }}>Wynik (PLN)</th>
+                    <th onClick={() => handleSort('valuePLN')} style={{ padding: '14px 18px', cursor: 'pointer', userSelect: 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Wartość (PLN)
+                        {sortField === 'valuePLN' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
+                      </div>
+                    </th>
+                    <th onClick={() => handleSort('profitLossPLN')} style={{ padding: '14px 18px', cursor: 'pointer', userSelect: 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Wynik (PLN)
+                        {sortField === 'profitLossPLN' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
+                      </div>
+                    </th>
                     <th style={{ padding: '14px 18px', textAlign: 'center' }}>Akcja</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {holdings.map((h) => {
-                    const currencySymbol = h.currency === 'USD' ? '$' : 'zł';
+                  {sortedHoldings.map((h) => {
+                    const currencySymbol = h.currency === 'USD' ? '$' : h.currency === 'EUR' ? '€' : 'zł';
                     const holdingCostPLN = getPLNValue(h.shares * h.buyPrice, h.currency);
                     const holdingValuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
                     const profitLossPLN = holdingValuePLN - holdingCostPLN;
