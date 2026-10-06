@@ -6,7 +6,7 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
   const cleanQuery = query.trim().toLowerCase();
   if (!cleanQuery) return [];
 
-  // 1. Szybkie dopasowanie lokalne (np. top spółki/ETF)
+  // 1. Dopasowanie lokalne
   const localMatches: TickerSuggestion[] = GLOBAL_DATABASE.filter(
     item =>
       item.symbol.toLowerCase().includes(cleanQuery) ||
@@ -19,14 +19,8 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
     exchDisp: item.symbol.endsWith('.WA') ? 'GPW' : item.type.toUpperCase(),
   }));
 
-  // 2. Szukanie na żywo we WSZYSTKICH spółkach świata (Yahoo Finance Search API)
+  // 2. Wyszukiwanie sieciowe
   try {
-    const response = await fetch(
-      `https://corsproxy.io/?${encodeURIComponent(
-        `https://query1.finance.yahoo.com/1/test/getquotes?quotes=${cleanQuery}`
-      )}`
-    );
-
     const searchUrl = `https://corsproxy.io/?${encodeURIComponent(
       `https://query1.finance.yahoo.com/v1/finance/search?q=${cleanQuery}&quotesCount=10&newsCount=0`
     )}`;
@@ -56,7 +50,6 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
           };
         });
 
-      // Łączymy wyniki lokalne z sieciowymi i usuwamy dublety
       const combined = [...localMatches];
       for (const item of apiResults) {
         if (!combined.some(c => c.symbol === item.symbol)) {

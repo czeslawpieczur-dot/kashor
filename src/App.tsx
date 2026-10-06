@@ -14,7 +14,7 @@ import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
 const APP_VERSION = 'v2.1.0';
-const BUILD_TIME = '2026-10-06 19:15';
+const BUILD_TIME = '2026-10-06 19:25';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -179,12 +179,12 @@ export default function App() {
     setLoading(false);
   };
 
-  const handleTickerChange = (value: string) => {
+  const handleTickerChange = async (value: string) => {
     setTicker(value);
     setSelectedName('');
 
     if (value.trim().length >= 1) {
-      const results = searchGlobalBaza(value);
+      const results = await searchGlobalBaza(value);
       setSuggestions(results);
       setShowSuggestions(results.length > 0);
     } else {
