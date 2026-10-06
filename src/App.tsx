@@ -14,8 +14,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.2.2';
-const BUILD_TIME = '2026-10-06 22:50';
+const APP_VERSION = 'v2.2.3';
+const BUILD_TIME = '2026-10-06 23:10';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -198,7 +198,7 @@ export default function App() {
         }
 
         return {
-          id: item.id.toString(), // konwersja do stringa dla UI
+          id: item.id.toString(),
           ticker: cleanTicker,
           name: finalName || cleanTicker,
           type: item.type || meta?.type || 'stock',
@@ -252,7 +252,6 @@ export default function App() {
       if (meta?.name) resolvedName = meta.name;
     }
 
-    // Bezpieczny numeryczny ID (Działa z bazą PostgreSQL)
     const newId = (Date.now() + Math.floor(Math.random() * 100000)).toString();
 
     const newHoldingObj: Holding = {
@@ -267,7 +266,6 @@ export default function App() {
       purchaseDate: purchaseDate || getTodayString(),
     };
 
-    // Optimistic UI
     setHoldings(prev => [...prev, newHoldingObj]);
 
     if (user) {
@@ -454,10 +452,11 @@ export default function App() {
               if (!resolvedName || resolvedName.toUpperCase() === rawTicker || resolvedName.includes('.WA')) {
                 if (meta?.name) resolvedName = meta.name;
               }
+              // Blokujemy wspólną cenę w cache, by wszystkie partie używały tej samej "startowej" wartości do czasu odświeżenia
               apiCache[rawTicker] = {
                 name: resolvedName || rawTicker,
                 type: stockData.type,
-                price: stockData.price,
+                price: stockData.price !== null ? stockData.price : price,
                 currency: stockData.currency
               };
             } catch (err) {
@@ -472,8 +471,6 @@ export default function App() {
           }
 
           const cachedData = apiCache[rawTicker];
-          
-          // BEZPIECZNE NUMERYCZNE ID
           const newId = (Date.now() + i).toString();
 
           importedHoldings.push({
@@ -500,7 +497,7 @@ export default function App() {
           await supabase.from('holdings').delete().eq('user_id', user.id);
           
           const supabaseRows = importedHoldings.map(h => ({
-            id: h.id, // Bezpieczny string numeryczny
+            id: h.id,
             user_id: user.id,
             ticker: h.ticker,
             name: h.name,
@@ -978,7 +975,8 @@ export default function App() {
                     {isExpanded && group.lots
                       .sort((a: any, b: any) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime())
                       .map((lot: any) => {
-                        const lotValPLN = getPLNValue(lot.shares * lot.currentPrice, lot.currency);
+                        // KRYTYCZNA POPRAWKA: Używamy grupowego (ogólnego) aktualnego kursu dla poszczególnej partii!
+                        const lotValPLN = getPLNValue(lot.shares * group.currentPrice, lot.currency);
                         const lotCostPLN = getPLNValue(lot.shares * lot.buyPrice, lot.currency);
                         const lotProfitPLN = lotValPLN - lotCostPLN;
                         const lotProfitPct = lotCostPLN > 0 ? (lotProfitPLN / lotCostPLN) * 100 : 0;
