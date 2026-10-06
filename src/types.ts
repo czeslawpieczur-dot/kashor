@@ -17,6 +17,7 @@ export interface Holding {
   buyPrice: number;
   currentPrice: number;
   currency: string;
+  purchaseDate?: string;
   priceHistory?: PriceHistory;
 }
 

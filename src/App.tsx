@@ -14,7 +14,7 @@ import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
 const APP_VERSION = 'v2.1.0';
-const BUILD_TIME = '2026-10-06 19:10';
+const BUILD_TIME = '2026-10-06 19:15';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -614,7 +614,7 @@ export default function App() {
         {/* WYKRES ALOKACJI */}
         <AllocationChart data={rawChartData} colors={CHART_COLORS} />
 
-        {/* FORMULARZ Z KALENDARZEM (DATA ZAKUPU) */}
+        {/* FORMULARZ Z KALENDARZEM */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
           <select
             value={assetType}
@@ -669,7 +669,6 @@ export default function App() {
             <option value="EUR">EUR</option>
           </select>
 
-          {/* DEDYKOWANE POLE DATY Z KALENDARZEM */}
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <input
               type="date"
