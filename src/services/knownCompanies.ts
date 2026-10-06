@@ -1,11 +1,11 @@
-import { GLOBAL_DATABASE, AssetMeta } from '../data/globalBaza';
-import { TickerSuggestion } from '../types';
+import { GLOBAL_DATABASE } from '../data/globalBaza';
+import type { AssetMeta } from '../data/globalBaza';
+import type { TickerSuggestion } from '../types';
 
 export const searchGlobalBaza = (query: string): TickerSuggestion[] => {
   const cleanQuery = query.trim().toLowerCase();
-  if (!cleanQuery || cleanQuery.length < 1) return [];
+  if (!cleanQuery) return [];
 
-  // Przeszukiwanie bazy offline po symbolu lub nazwie
   const matches = GLOBAL_DATABASE.filter(
     item =>
       item.symbol.toLowerCase().includes(cleanQuery) ||
