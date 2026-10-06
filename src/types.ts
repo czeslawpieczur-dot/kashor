@@ -1,13 +1,5 @@
 export type AssetType = 'stock' | 'etf' | 'commodity' | 'crypto';
 
-export interface PriceHistory {
-  prevClose?: number;
-  days7?: number;
-  days30?: number;
-  ytd?: number;
-  days365?: number;
-}
-
 export interface Holding {
   id: string;
   ticker: string;
@@ -17,8 +9,8 @@ export interface Holding {
   buyPrice: number;
   currentPrice: number;
   currency: string;
-  purchaseDate?: string;
-  priceHistory?: PriceHistory;
+  purchaseDate: string;
+  broker?: string; // <--- NOWE POLE
 }
 
 export interface TickerSuggestion {
@@ -29,11 +21,10 @@ export interface TickerSuggestion {
   exchDisp?: string;
 }
 
+export type SortField = 'ticker' | 'shares' | 'valuePLN' | 'profitLossPLN';
+export type SortOrder = 'asc' | 'desc';
+
 export interface CurrencyHistoryPoint {
   date: string;
   rate: number;
 }
-
-export type TimeRange = '1D' | '7D' | '30D' | 'YTD' | '12M';
-export type SortField = 'ticker' | 'shares' | 'valuePLN' | 'profitLossPLN';
-export type SortOrder = 'asc' | 'desc';

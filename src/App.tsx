@@ -3,7 +3,7 @@ import {
   Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, 
   Search, Plus, RefreshCw, Upload, Eraser, LogOut, KeyRound, 
   TrendingUp, TrendingDown, Calendar, HelpCircle,
-  ChevronRight, ChevronDown, CornerDownRight
+  ChevronRight, ChevronDown, CornerDownRight, Layers
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -14,7 +14,7 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.3.5';
+const APP_VERSION = 'v2.4.0';
 const BUILD_TIME = '2026-10-06 23:59';
 
 const CHART_COLORS = [
@@ -68,6 +68,9 @@ export default function App() {
   const [buyPrice, setBuyPrice] = useState('');
   const [currency, setCurrency] = useState('PLN');
   const [purchaseDate, setPurchaseDate] = useState<string>(getTodayString());
+  const [selectedBroker, setSelectedBroker] = useState<string>('XTB'); // Domyślny broker do formularza
+  const [filterBroker, setFilterBroker] = useState<string>('ALL'); // Filtr brokera w UI
+  
   const [loading, setLoading] = useState(false);
   const [showXtbHelp, setShowXtbHelp] = useState(false);
 
@@ -143,7 +146,8 @@ export default function App() {
             return {
               ...item,
               name: finalName || cleanTicker,
-              purchaseDate: item.purchaseDate || getTodayString()
+              purchaseDate: item.purchaseDate || getTodayString(),
+              broker: item.broker || 'XTB'
             };
           });
           setHoldings(formatted); 
@@ -217,6 +221,7 @@ export default function App() {
           currentPrice: Number(item.current_price),
           currency: item.currency || meta?.currency || 'PLN',
           purchaseDate: item.purchase_date || getTodayString(),
+          broker: item.broker || 'XTB'
         };
       });
       setHoldings(formatted);
@@ -289,6 +294,7 @@ export default function App() {
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
       currency: currency || stockData.currency || meta?.currency || 'PLN',
       purchaseDate: purchaseDate || getTodayString(),
+      broker: selectedBroker
     };
 
     if (stockData.price === null) {
@@ -308,6 +314,7 @@ export default function App() {
         current_price: newHoldingObj.currentPrice,
         currency: newHoldingObj.currency,
         purchase_date: newHoldingObj.purchaseDate,
+        broker: selectedBroker
       }]);
 
       if (error) {
@@ -414,10 +421,11 @@ export default function App() {
     }
   };
 
-  // NOWA, BEZAWARYJNA I BŁYSKAWICZNA FUNKCJA IMPORTU CSV z try/catch/finally
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const fileBroker = window.prompt('Podaj nazwę brokera dla tego importu (np. XTB, Revolut, mBank):', 'XTB') || 'XTB';
 
     setLoading(true);
 
@@ -444,7 +452,7 @@ export default function App() {
           }
 
           if (headerIndex === -1) {
-            alert('Nie rozpoznałem nagłówków w pliku CSV z XTB. Upewnij się, że eksportujesz zakładkę Open Positions.');
+            alert('Nie rozpoznałem nagłówków w pliku CSV z XTB/brokera. Upewnij się, że eksportujesz pozycje otwarte.');
             return;
           }
 
@@ -464,7 +472,6 @@ export default function App() {
           const importedHoldings: Holding[] = [];
           let currentTicker = '';
 
-          // BŁYSKAWICZNA PĘTLA IMPORTU bez odpytywania API sieciowego
           for (let i = headerIndex + 1; i < rows.length; i++) {
             const row = rows[i];
             if (!row) continue;
@@ -503,9 +510,10 @@ export default function App() {
               type: meta?.type || 'stock',
               shares: volume,
               buyPrice: price,
-              currentPrice: price, // początkowo ustawiana na cenę zakupu
+              currentPrice: price,
               currency: meta?.currency || inferredCurrency,
               purchaseDate: parsedDate,
+              broker: fileBroker,
             });
           }
 
@@ -516,9 +524,9 @@ export default function App() {
 
           if (user) {
             const overwrite = window.confirm(
-              `Znaleziono ${importedHoldings.length} transakcji z XTB.\n\n` +
+              `Znaleziono ${importedHoldings.length} transakcji od brokera ${fileBroker}.\n\n` +
               `OK = nadpisz cały istniejący portfel\n` +
-              `Anuluj = dodaj do istniejących pozycji`
+              `Anuluj = dodaj/dopisze do istniejących pozycji`
             );
 
             if (overwrite) {
@@ -535,6 +543,7 @@ export default function App() {
               current_price: h.currentPrice,
               currency: h.currency,
               purchase_date: h.purchaseDate,
+              broker: h.broker
             }));
 
             const { error } = await supabase.from('holdings').insert(supabaseRows);
@@ -547,13 +556,13 @@ export default function App() {
             
             await fetchHoldingsFromSupabase();
           } else {
-            setHoldings(importedHoldings);
+            setHoldings(prev => [...prev, ...importedHoldings]);
           }
 
-          alert(`Sukces! Błyskawicznie zaimportowano ${importedHoldings.length} transakcji z XTB. Kliknij "Odśwież kursy", aby pobrać aktualne ceny z giełdy.`);
+          alert(`Sukces! Zaimportowano ${importedHoldings.length} transakcji z brokera ${fileBroker}. Kliknij "Odśwież kursy", aby pobrać ceny z giełdy.`);
         } catch (err) {
           console.error('Błąd podczas importu CSV:', err);
-          alert('Wystąpił nieoczekiwany błąd podczas przetwarzania pliku. Sprawdź poprawność CSV.');
+          alert('Wystąpił nieoczekiwany błąd podczas przetwarzania pliku.');
         } finally {
           setLoading(false);
           e.target.value = '';
@@ -614,14 +623,26 @@ export default function App() {
     });
   };
 
-  const totalCostPLN = holdings.reduce((sum, h) => sum + getPLNValue(h.shares * h.buyPrice, h.currency), 0);
-  const totalValuePLN = holdings.reduce((sum, h) => sum + getPLNValue(h.shares * h.currentPrice, h.currency), 0);
+  // Wyciągamy Unikalną Listę Brokerów
+  const uniqueBrokers = useMemo(() => {
+    const list = Array.from(new Set(holdings.map(h => h.broker || 'XTB')));
+    return list.sort();
+  }, [holdings]);
+
+  // Przefiltrowana lista pozycji pod kątem wybranego brokera
+  const filteredHoldings = useMemo(() => {
+    if (filterBroker === 'ALL') return holdings;
+    return holdings.filter(h => (h.broker || 'XTB') === filterBroker);
+  }, [holdings, filterBroker]);
+
+  const totalCostPLN = filteredHoldings.reduce((sum, h) => sum + getPLNValue(h.shares * h.buyPrice, h.currency), 0);
+  const totalValuePLN = filteredHoldings.reduce((sum, h) => sum + getPLNValue(h.shares * h.currentPrice, h.currency), 0);
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
   const groupedHoldingsList = useMemo(() => {
     const map = new Map();
-    holdings.forEach(h => {
+    filteredHoldings.forEach(h => {
       if (!map.has(h.ticker)) {
         map.set(h.ticker, {
           ticker: h.ticker,
@@ -644,7 +665,7 @@ export default function App() {
       ...g,
       avgBuyPrice: g.totalShares > 0 ? g.totalCostOrig / g.totalShares : 0
     }));
-  }, [holdings]);
+  }, [filteredHoldings]);
 
   const rawChartData = groupedHoldingsList.map((g) => {
     const valuePLN = getPLNValue(g.totalShares * g.currentPrice, g.currency);
@@ -779,7 +800,7 @@ export default function App() {
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <label style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(34, 197, 94, 0.3)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Upload size={16} /> Importuj z XTB (CSV)
+                <Upload size={16} /> Importuj z CSV
                 <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
               </label>
               
@@ -808,6 +829,47 @@ export default function App() {
           </div>
         </header>
 
+        {/* PASEK FILTROWANIA BROKERA */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', backgroundColor: '#151d30', padding: '12px 18px', borderRadius: '12px', border: '1px solid #1e293b', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Layers size={16} color="#38bdf8" /> Pokaż konto / maklera:
+          </span>
+          <button
+            onClick={() => setFilterBroker('ALL')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '20px',
+              border: filterBroker === 'ALL' ? '1px solid #38bdf8' : '1px solid #334155',
+              backgroundColor: filterBroker === 'ALL' ? 'rgba(56, 189, 248, 0.15)' : '#0b0f19',
+              color: filterBroker === 'ALL' ? '#38bdf8' : '#94a3b8',
+              fontSize: '13px',
+              fontWeight: '600',
+              cursor: 'pointer'
+            }}
+          >
+            Wszystkie kasy ({holdings.length})
+          </button>
+
+          {uniqueBrokers.map(b => (
+            <button
+              key={b}
+              onClick={() => setFilterBroker(b)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '20px',
+                border: filterBroker === b ? '1px solid #38bdf8' : '1px solid #334155',
+                backgroundColor: filterBroker === b ? 'rgba(56, 189, 248, 0.15)' : '#0b0f19',
+                color: filterBroker === b ? '#38bdf8' : '#94a3b8',
+                fontSize: '13px',
+                fontWeight: '600',
+                cursor: 'pointer'
+              }}
+            >
+              {b} ({holdings.filter(h => (h.broker || 'XTB') === b).length})
+            </button>
+          ))}
+        </div>
+
         {/* KARTY PODSUMOWANIA */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '28px' }}>
           <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
@@ -830,7 +892,7 @@ export default function App() {
         {/* WYKRES ALOKACJI */}
         <AllocationChart data={rawChartData} colors={CHART_COLORS} />
 
-        {/* FORMULARZ Z KALENDARZEM */}
+        {/* FORMULARZ Z WYBOREM BROKERA */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
           <select
             value={assetType}
@@ -843,11 +905,11 @@ export default function App() {
             <option value="crypto">Krypto</option>
           </select>
 
-          <div style={{ flex: 2, minWidth: '200px', position: 'relative' }}>
+          <div style={{ flex: 2, minWidth: '180px', position: 'relative' }}>
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
-                placeholder="Wpisz nazwę lub ticker (np. cd proj, pko, btc)"
+                placeholder="Wpisz nazwę lub ticker"
                 value={ticker}
                 onChange={(e) => handleTickerChange(e.target.value)}
                 style={{ width: '100%', padding: '10px 36px 10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }}
@@ -876,8 +938,8 @@ export default function App() {
             )}
           </div>
 
-          <input type="text" placeholder="Liczba" value={shares} onChange={(e) => setShares(e.target.value)} style={{ flex: 1, minWidth: '90px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
-          <input type="text" placeholder="Cena zakupu" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} style={{ flex: 1, minWidth: '110px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+          <input type="text" placeholder="Liczba" value={shares} onChange={(e) => setShares(e.target.value)} style={{ flex: 1, minWidth: '80px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+          <input type="text" placeholder="Cena zakupu" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} style={{ flex: 1, minWidth: '90px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
           
           <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#38bdf8', fontWeight: 'bold' }}>
             <option value="PLN">PLN</option>
@@ -885,16 +947,21 @@ export default function App() {
             <option value="EUR">EUR</option>
           </select>
 
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <input
-              type="date"
-              lang="pl-PL"
-              value={purchaseDate}
-              onChange={(e) => setPurchaseDate(e.target.value)}
-              title="Data zakupu"
-              style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#94a3b8', fontSize: '13px' }}
-            />
-          </div>
+          <select value={selectedBroker} onChange={(e) => setSelectedBroker(e.target.value)} style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#22c55e', fontWeight: 'bold' }}>
+            <option value="XTB">XTB</option>
+            <option value="Revolut">Revolut</option>
+            <option value="mBank">mBank</option>
+            <option value="Inny">Inny</option>
+          </select>
+
+          <input
+            type="date"
+            lang="pl-PL"
+            value={purchaseDate}
+            onChange={(e) => setPurchaseDate(e.target.value)}
+            title="Data zakupu"
+            style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#94a3b8', fontSize: '13px' }}
+          />
 
           <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Plus size={18} /> Dodaj
@@ -1015,8 +1082,11 @@ export default function App() {
                         return (
                           <tr key={lot.id} style={{ borderBottom: '1px solid #1e293b', backgroundColor: 'rgba(15, 23, 42, 0.6)' }}>
                             <td style={{ padding: '10px 18px 10px 50px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#64748b', fontSize: '12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', fontSize: '12px' }}>
                                 <CornerDownRight size={14} /> Partia
+                                <span style={{ backgroundColor: '#1e293b', color: '#38bdf8', padding: '2px 6px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold' }}>
+                                  {lot.broker || 'XTB'}
+                                </span>
                               </div>
                             </td>
                             <td style={{ padding: '10px 18px', fontSize: '12px', color: '#94a3b8' }}>
