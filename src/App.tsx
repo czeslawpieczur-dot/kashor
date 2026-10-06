@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, Search } from 'lucide-react';
+import { Wallet, Trash2, Edit2, Check, ArrowUpDown, RefreshCw, Upload, Eraser, LogOut, Search } from 'lucide-react';
+import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import type { Holding, TickerSuggestion, SortField, SortOrder, AssetType } from './types';
@@ -183,6 +184,89 @@ export default function App() {
     setHoldings(prev => prev.filter(h => h.id !== id));
   };
 
+  const clearAllHoldings = async () => {
+    if (holdings.length === 0) return;
+    if (window.confirm('Czy na pewno chcesz usunąć WSZYSTKIE pozycje?')) {
+      if (user) await supabase.from('holdings').delete().eq('user_id', user.id);
+      setHoldings([]);
+      localStorage.removeItem('kashor_holdings');
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: false,
+      skipEmptyLines: true,
+      encoding: 'UTF-8',
+      complete: async (results: Papa.ParseResult<string[]>) => {
+        const rows = results.data;
+        if (!rows || rows.length === 0) return;
+
+        let headerIndex = -1;
+        for (let i = 0; i < rows.length; i++) {
+          const rowStr = rows[i].join(',');
+          if (rowStr.includes('Ticker') || rowStr.includes('Instrument')) {
+            headerIndex = i;
+            break;
+          }
+        }
+
+        if (headerIndex === -1) return;
+
+        const headers = rows[headerIndex].map((h) => h ? h.replace(/"/g, '').trim() : '');
+        let tickerCol = headers.indexOf('Ticker');
+        if (tickerCol === -1) tickerCol = headers.indexOf('Instrument');
+        const volumeCol = headers.indexOf('Volume');
+        const openPriceCol = headers.indexOf('Open Price');
+
+        if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) return;
+
+        setLoading(true);
+        const importedHoldings: Holding[] = [];
+
+        for (let i = headerIndex + 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || !row[tickerCol]) continue;
+
+          let rawTicker = row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase();
+          if (rawTicker.endsWith('.PL')) rawTicker = rawTicker.replace('.PL', '.WA');
+          else if (rawTicker.endsWith('.US')) rawTicker = rawTicker.replace('.US', '');
+
+          const volume = parseFloat(row[volumeCol].toString().replace(',', '.'));
+          const price = parseFloat(row[openPriceCol].toString().replace(',', '.'));
+
+          if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
+
+          const stockData = await fetchStockPriceAndName(rawTicker);
+          importedHoldings.push({
+            id: Date.now().toString() + Math.random(),
+            ticker: rawTicker,
+            name: stockData.name,
+            type: stockData.type,
+            shares: volume,
+            buyPrice: price,
+            currentPrice: stockData.price || price,
+            currency: stockData.currency,
+          });
+        }
+
+        setHoldings(importedHoldings);
+        setLoading(false);
+        e.target.value = '';
+      }
+    });
+  };
+
+  const handleLogout = async () => {
+    if (user) await supabase.auth.signOut();
+    setIsGuest(false);
+    setUser(null);
+    localStorage.removeItem('kashor_is_guest');
+  };
+
   const getPLNValue = (amount: number, curr: string) => {
     if (curr === 'USD') return amount * (usdPln || 3.88);
     if (curr === 'EUR') return amount * (eurPln || 4.28);
@@ -222,7 +306,7 @@ export default function App() {
     <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', padding: '24px 16px', boxSizing: 'border-box' }}>
       <div style={{ maxWidth: '1280px', margin: '0 auto' }}>
         
-        {/* HEADER */}
+        {/* NAGŁÓWEK */}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', borderBottom: '1px solid #1e293b', paddingBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
             <div style={{ backgroundColor: 'rgba(56, 189, 248, 0.1)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
@@ -234,6 +318,19 @@ export default function App() {
                 USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln.toFixed(4)} zł</strong> | EUR/PLN: <strong style={{ color: '#a855f7' }}>{eurPln.toFixed(4)} zł</strong>
               </p>
             </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <label style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(34, 197, 94, 0.3)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Upload size={16} /> Importuj z XTB (CSV)
+              <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
+            </label>
+            <button onClick={clearAllHoldings} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Eraser size={16} /> Wyczyść
+            </button>
+            <button onClick={handleLogout} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#94a3b8', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <LogOut size={16} /> Wyjdź
+            </button>
           </div>
         </header>
 
