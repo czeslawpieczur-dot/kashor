@@ -14,7 +14,7 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.3.4';
+const APP_VERSION = 'v2.3.5';
 const BUILD_TIME = '2026-10-06 23:59';
 
 const CHART_COLORS = [
@@ -29,6 +29,7 @@ const normalizeTicker = (t: string): string => {
   let s = t.trim().toUpperCase();
   if (s.endsWith('.PL')) s = s.replace(/\.PL$/, '.WA');
   if (s.endsWith('.US')) s = s.replace(/\.US$/, '');
+  if (s.endsWith('.UK')) s = s.replace(/\.UK$/, '.L');
   return s;
 };
 
@@ -413,6 +414,7 @@ export default function App() {
     }
   };
 
+  // NOWA, BEZAWARYJNA I BŁYSKAWICZNA FUNKCJA IMPORTU CSV z try/catch/finally
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -425,168 +427,137 @@ export default function App() {
       encoding: 'UTF-8',
       delimitersToGuess: [',', ';', '\t', '|'],
       complete: async (results: Papa.ParseResult<string[]>) => {
-        const rows = results.data;
-        if (!rows || rows.length === 0) {
-          alert('Plik jest pusty lub uszkodzony.');
-          setLoading(false);
-          e.target.value = '';
-          return;
-        }
-
-        let headerIndex = -1;
-        for (let i = 0; i < rows.length; i++) {
-          const rowStr = rows[i].join(' ').toLowerCase();
-          if (rowStr.includes('ticker') || rowStr.includes('open price') || rowStr.includes('cena otwarcia')) {
-            headerIndex = i;
-            break;
+        try {
+          const rows = results.data;
+          if (!rows || rows.length === 0) {
+            alert('Plik jest pusty lub uszkodzony.');
+            return;
           }
-        }
 
-        if (headerIndex === -1) {
-          alert('Nie rozpoznałem nagłówków w pliku CSV z XTB. Upewnij się, że eksportujesz zakładkę Open Positions.');
-          setLoading(false);
-          e.target.value = '';
-          return;
-        }
-
-        const headers = rows[headerIndex].map((h) => h ? h.replace(/"/g, '').trim().toLowerCase() : '');
-        
-        let tickerCol = headers.indexOf('ticker');
-        if (tickerCol === -1) tickerCol = headers.findIndex(h => h === 'symbol' || h === 'instrument' || h.includes('instrument'));
-        let volumeCol = headers.findIndex(h => h.includes('volume') || h.includes('wolumen') || h.includes('ilość') || h.includes('ilosc'));
-        let openPriceCol = headers.findIndex(h => h.includes('open price') || h.includes('cena otwarcia'));
-        let dateCol = headers.findIndex(h => h.includes('time') || h.includes('czas'));
-
-        if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) {
-          alert('Plik CSV nie zawiera wszystkich wymaganych kolumn (Ticker, Volume, Open Price).');
-          setLoading(false);
-          e.target.value = '';
-          return;
-        }
-
-        const importedHoldings: Holding[] = [];
-        let currentTicker = '';
-        const apiCache: Record<string, any> = {};
-
-        for (let i = headerIndex + 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row) continue;
-
-          const cellTicker = row[tickerCol] ? row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase() : '';
-          if (cellTicker && !cellTicker.includes('SUMA') && !cellTicker.includes('TOTAL') && !cellTicker.includes('IKZE')) {
-            currentTicker = cellTicker;
-          }
-          if (!currentTicker) continue;
-
-          const dateStr = dateCol !== -1 && row[dateCol] ? row[dateCol].toString() : '';
-          const dateMatch = dateStr.match(/\d{4}-\d{2}-\d{2}/);
-          if (!dateMatch) continue;
-          const parsedDate = dateMatch[0];
-
-          let rawTicker = normalizeTicker(currentTicker);
-
-          const volumeStr = row[volumeCol] ? row[volumeCol].toString() : '';
-          const priceStr = row[openPriceCol] ? row[openPriceCol].toString() : '';
-
-          const volume = parseFloat(volumeStr.replace(',', '.'));
-          const price = parseFloat(priceStr.replace(',', '.'));
-
-          if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
-
-          let inferredCurrency = 'PLN';
-          if (rawTicker.endsWith('.DE')) inferredCurrency = 'EUR';
-          if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.US') || !rawTicker.includes('.')) inferredCurrency = 'USD';
-
-          if (!apiCache[rawTicker]) {
-            try {
-              const stockData = await fetchStockPriceAndName(rawTicker);
-              const meta = getMetaBySymbol(rawTicker);
-              let resolvedName = stockData.name;
-              if (!resolvedName || resolvedName.toUpperCase() === rawTicker || resolvedName.includes('.WA')) {
-                if (meta?.name) resolvedName = meta.name;
-              }
-              apiCache[rawTicker] = {
-                name: resolvedName || rawTicker,
-                type: stockData.type,
-                price: stockData.price !== null ? stockData.price : price,
-                currency: stockData.currency !== 'PLN' ? stockData.currency : inferredCurrency
-              };
-              await new Promise(resolve => setTimeout(resolve, 250));
-            } catch (err) {
-              const meta = getMetaBySymbol(rawTicker);
-              apiCache[rawTicker] = {
-                name: meta?.name || rawTicker,
-                type: meta?.type || 'stock',
-                price: price,
-                currency: meta?.currency || inferredCurrency
-              };
+          let headerIndex = -1;
+          for (let i = 0; i < rows.length; i++) {
+            const rowStr = rows[i].join(' ').toLowerCase();
+            if (rowStr.includes('ticker') || rowStr.includes('open price') || rowStr.includes('cena otwarcia')) {
+              headerIndex = i;
+              break;
             }
           }
 
-          const cachedData = apiCache[rawTicker];
-          const newId = crypto.randomUUID();
-
-          importedHoldings.push({
-            id: newId,
-            ticker: rawTicker,
-            name: cachedData.name || rawTicker,
-            type: cachedData.type || 'stock',
-            shares: volume,
-            buyPrice: price,
-            currentPrice: cachedData.price || price,
-            currency: cachedData.currency,
-            purchaseDate: parsedDate,
-          });
-        }
-
-        if (importedHoldings.length === 0) {
-          alert('Plik został załadowany, ale nie znaleziono w nim poprawnych pojedynczych transakcji.');
-          setLoading(false);
-          e.target.value = '';
-          return;
-        }
-
-        if (user) {
-          const overwrite = window.confirm(
-            `Znaleziono ${importedHoldings.length} transakcji z XTB.\n\n` +
-            `OK = nadpisz cały istniejący portfel\n` +
-            `Anuluj = dodaj do istniejących pozycji`
-          );
-
-          if (overwrite) {
-            await supabase.from('holdings').delete().eq('user_id', user.id);
-          }
-          
-          const supabaseRows = importedHoldings.map(h => ({
-            user_id: user.id,
-            ticker: h.ticker,
-            name: h.name,
-            type: h.type,
-            shares: h.shares,
-            buy_price: h.buyPrice,
-            current_price: h.currentPrice,
-            currency: h.currency,
-            purchase_date: h.purchaseDate,
-          }));
-
-          const { error } = await supabase.from('holdings').insert(supabaseRows);
-          
-          if (error) {
-            console.error("Szczegóły błędu Supabase:", error);
-            alert(`BŁĄD ZAPISU DO BAZY: ${error.message}`);
-            setLoading(false);
-            e.target.value = '';
+          if (headerIndex === -1) {
+            alert('Nie rozpoznałem nagłówków w pliku CSV z XTB. Upewnij się, że eksportujesz zakładkę Open Positions.');
             return;
           }
-          
-          await fetchHoldingsFromSupabase();
-        } else {
-          setHoldings(importedHoldings);
-        }
 
-        alert(`Sukces! Zaimportowano ${importedHoldings.length} pojedynczych transakcji z XTB.`);
-        setLoading(false);
-        e.target.value = '';
+          const headers = rows[headerIndex].map((h) => h ? h.replace(/"/g, '').trim().toLowerCase() : '');
+          
+          let tickerCol = headers.indexOf('ticker');
+          if (tickerCol === -1) tickerCol = headers.findIndex(h => h === 'symbol' || h === 'instrument' || h.includes('instrument'));
+          let volumeCol = headers.findIndex(h => h.includes('volume') || h.includes('wolumen') || h.includes('ilość') || h.includes('ilosc'));
+          let openPriceCol = headers.findIndex(h => h.includes('open price') || h.includes('cena otwarcia'));
+          let dateCol = headers.findIndex(h => h.includes('time') || h.includes('czas'));
+
+          if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) {
+            alert('Plik CSV nie zawiera wszystkich wymaganych kolumn (Ticker, Volume, Open Price).');
+            return;
+          }
+
+          const importedHoldings: Holding[] = [];
+          let currentTicker = '';
+
+          // BŁYSKAWICZNA PĘTLA IMPORTU bez odpytywania API sieciowego
+          for (let i = headerIndex + 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row) continue;
+
+            const cellTicker = row[tickerCol] ? row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase() : '';
+            if (cellTicker && !cellTicker.includes('SUMA') && !cellTicker.includes('TOTAL') && !cellTicker.includes('IKZE')) {
+              currentTicker = cellTicker;
+            }
+            if (!currentTicker) continue;
+
+            const dateStr = dateCol !== -1 && row[dateCol] ? row[dateCol].toString() : '';
+            const dateMatch = dateStr.match(/\d{4}-\d{2}-\d{2}/);
+            if (!dateMatch) continue;
+            const parsedDate = dateMatch[0];
+
+            const rawTicker = normalizeTicker(currentTicker);
+
+            const volumeStr = row[volumeCol] ? row[volumeCol].toString() : '';
+            const priceStr = row[openPriceCol] ? row[openPriceCol].toString() : '';
+
+            const volume = parseFloat(volumeStr.replace(',', '.'));
+            const price = parseFloat(priceStr.replace(',', '.'));
+
+            if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
+
+            let inferredCurrency = 'PLN';
+            if (rawTicker.endsWith('.DE')) inferredCurrency = 'EUR';
+            if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.L') || !rawTicker.includes('.')) inferredCurrency = 'USD';
+
+            const meta = getMetaBySymbol(rawTicker);
+
+            importedHoldings.push({
+              id: crypto.randomUUID(),
+              ticker: rawTicker,
+              name: meta?.name || rawTicker,
+              type: meta?.type || 'stock',
+              shares: volume,
+              buyPrice: price,
+              currentPrice: price, // początkowo ustawiana na cenę zakupu
+              currency: meta?.currency || inferredCurrency,
+              purchaseDate: parsedDate,
+            });
+          }
+
+          if (importedHoldings.length === 0) {
+            alert('Plik został załadowany, ale nie znaleziono w nim poprawnych pojedynczych transakcji.');
+            return;
+          }
+
+          if (user) {
+            const overwrite = window.confirm(
+              `Znaleziono ${importedHoldings.length} transakcji z XTB.\n\n` +
+              `OK = nadpisz cały istniejący portfel\n` +
+              `Anuluj = dodaj do istniejących pozycji`
+            );
+
+            if (overwrite) {
+              await supabase.from('holdings').delete().eq('user_id', user.id);
+            }
+            
+            const supabaseRows = importedHoldings.map(h => ({
+              user_id: user.id,
+              ticker: h.ticker,
+              name: h.name,
+              type: h.type,
+              shares: h.shares,
+              buy_price: h.buyPrice,
+              current_price: h.currentPrice,
+              currency: h.currency,
+              purchase_date: h.purchaseDate,
+            }));
+
+            const { error } = await supabase.from('holdings').insert(supabaseRows);
+            
+            if (error) {
+              console.error("Szczegóły błędu Supabase:", error);
+              alert(`BŁĄD ZAPISU DO BAZY: ${error.message}`);
+              return;
+            }
+            
+            await fetchHoldingsFromSupabase();
+          } else {
+            setHoldings(importedHoldings);
+          }
+
+          alert(`Sukces! Błyskawicznie zaimportowano ${importedHoldings.length} transakcji z XTB. Kliknij "Odśwież kursy", aby pobrać aktualne ceny z giełdy.`);
+        } catch (err) {
+          console.error('Błąd podczas importu CSV:', err);
+          alert('Wystąpił nieoczekiwany błąd podczas przetwarzania pliku. Sprawdź poprawność CSV.');
+        } finally {
+          setLoading(false);
+          e.target.value = '';
+        }
       }
     });
   };

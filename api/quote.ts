@@ -8,16 +8,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const cleanSymbol = symbol.trim().toUpperCase();
+    let cleanSymbol = symbol.trim().toUpperCase();
+    
+    // Mapowanie końcówek Londynu XTB -> Yahoo
+    if (cleanSymbol.endsWith('.UK')) {
+      cleanSymbol = cleanSymbol.replace(/\.UK$/, '.L');
+    }
 
-    // v7/quote jest zablokowane (401) – używamy v8/chart
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`;
 
     const response = await fetch(yahooUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-      },
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
     });
 
     if (!response.ok) {
@@ -28,24 +31,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const result = data?.chart?.result?.[0];
     const meta = result?.meta;
 
-    if (!meta || meta.regularMarketPrice == null) {
+    if (!meta) {
       return res.status(404).json({ error: 'Nie znaleziono symbolu' });
     }
 
-    let type = 'stock';
-    if (meta.instrumentType === 'ETF') type = 'etf';
-    if (meta.instrumentType === 'CRYPTOCURRENCY' || cleanSymbol.includes('-USD')) type = 'crypto';
-    if (meta.instrumentType === 'FUTURE' || cleanSymbol.includes('=F')) type = 'commodity';
-
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
     return res.status(200).json({
-      price: meta.regularMarketPrice,
+      price: meta.regularMarketPrice || null,
       name: meta.shortName || meta.longName || cleanSymbol,
       currency: meta.currency || 'PLN',
-      type,
+      type: meta.instrumentType === 'ETF' ? 'etf' : 'stock',
     });
   } catch (error) {
-    console.error(error);
     return res.status(500).json({ error: 'Błąd serwera API' });
   }
 }
