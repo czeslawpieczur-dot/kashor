@@ -1,17 +1,51 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, Trash2, Edit2, Check, ArrowUpDown, Upload, Eraser, LogOut, Search } from 'lucide-react';
+import { 
+  Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, 
+  Search, Plus, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, 
+  UserCheck, PieChart as PieChartIcon, LineChart as LineChartIcon, 
+  X, KeyRound, TrendingUp, TrendingDown 
+} from 'lucide-react';
 import Papa from 'papaparse';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
-import type { Holding, TickerSuggestion, SortField, SortOrder, AssetType } from './types';
+import type { Holding, TickerSuggestion, SortField, SortOrder, AssetType, CurrencyHistoryPoint } from './types';
 import { searchGlobalBaza } from './services/knownCompanies';
 import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 
 const APP_VERSION = 'v2.0.0';
+const BUILD_TIME = '2026-10-06 18:46';
+
+const CHART_COLORS = [
+  '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
+  '#ec4899', '#06b6d4', '#10b981', '#f43f5e', '#6366f1',
+  '#8b5cf6', '#d946ef', '#64748b'
+];
+
+const translateAuthError = (message: string): string => {
+  const msg = message.toLowerCase();
+  if (msg.includes('invalid login credentials')) return 'Nieprawidłowy e-mail lub hasło.';
+  if (msg.includes('user already registered') || msg.includes('already exists')) return 'Konto o tym adresie e-mail już istnieje.';
+  if (msg.includes('password should be at least')) return 'Hasło musi mieć co najmniej 6 znaków.';
+  if (msg.includes('unable to validate email address')) return 'Wprowadź poprawny adres e-mail.';
+  if (msg.includes('email not confirmed')) return 'Adres e-mail nie został jeszcze potwierdzony.';
+  if (msg.includes('rate limit')) return 'Zbyt wiele prób. Spróbuj ponownie za chwilę.';
+  return 'Wystąpił błąd autoryzacji: ' + message;
+};
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isGuest, setIsGuest] = useState<boolean>(() => localStorage.getItem('kashor_is_guest') === 'true');
+
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [isPasswordResetMode, setIsPasswordResetMode] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
 
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [usdPln, setUsdPln] = useState<number>(3.88);
@@ -31,6 +65,15 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<TickerSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
+  // MODAL WYKRESU WALUT (NBP)
+  const [currencyModal, setCurrencyModal] = useState<{ open: boolean; code: 'USD' | 'EUR'; range: '1M' | '3M' | '1R' }>({
+    open: false,
+    code: 'USD',
+    range: '1M',
+  });
+  const [currencyHistory, setCurrencyHistory] = useState<CurrencyHistoryPoint[]>([]);
+  const [currencyHistoryLoading, setCurrencyHistoryLoading] = useState(false);
+
   const [sortField, setSortField] = useState<SortField>('valuePLN');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
@@ -41,9 +84,11 @@ export default function App() {
         setIsGuest(false);
         localStorage.removeItem('kashor_is_guest');
       }
+      setAuthLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setIsPasswordResetMode(true);
       if (session?.user) {
         setUser(session.user);
         setIsGuest(false);
@@ -51,16 +96,20 @@ export default function App() {
       } else {
         setUser(null);
       }
+      setAuthLoading(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
+  const refreshExchangeRates = async () => {
+    const rates = await fetchNbpRates();
+    setUsdPln(rates.usd);
+    setEurPln(rates.eur);
+  };
+
   useEffect(() => {
-    fetchNbpRates().then(rates => {
-      setUsdPln(rates.usd);
-      setEurPln(rates.eur);
-    });
+    refreshExchangeRates();
   }, []);
 
   useEffect(() => {
@@ -71,6 +120,8 @@ export default function App() {
       if (saved) {
         try { setHoldings(JSON.parse(saved)); } catch (e) { console.error(e); }
       }
+    } else {
+      setHoldings([]);
     }
   }, [user, isGuest]);
 
@@ -79,6 +130,34 @@ export default function App() {
       localStorage.setItem('kashor_holdings', JSON.stringify(holdings));
     }
   }, [holdings, isGuest, user]);
+
+  useEffect(() => {
+    if (!currencyModal.open) return;
+
+    const fetchCurrencyHistory = async () => {
+      setCurrencyHistoryLoading(true);
+      let count = 30;
+      if (currencyModal.range === '3M') count = 90;
+      if (currencyModal.range === '1R') count = 255;
+
+      try {
+        const response = await fetch(
+          `https://api.nbp.pl/api/exchangerates/rates/a/${currencyModal.code.toLowerCase()}/last/${count}/?format=json`
+        );
+        const data = await response.json();
+        const points: CurrencyHistoryPoint[] = (data?.rates || []).map((r: any) => ({
+          date: r.effectiveDate.slice(5),
+          rate: r.mid,
+        }));
+        setCurrencyHistory(points);
+      } catch (err) {
+        console.error('Błąd historii NBP:', err);
+      }
+      setCurrencyHistoryLoading(false);
+    };
+
+    fetchCurrencyHistory();
+  }, [currencyModal.open, currencyModal.code, currencyModal.range]);
 
   const fetchHoldingsFromSupabase = async () => {
     if (!user) return;
@@ -170,6 +249,36 @@ export default function App() {
     setLoading(false);
   };
 
+  const refreshPrices = async () => {
+    if (holdings.length === 0) return;
+    setLoading(true);
+    await refreshExchangeRates();
+
+    const updatedHoldings = await Promise.all(
+      holdings.map(async (item) => {
+        const stockData = await fetchStockPriceAndName(item.ticker, item.name);
+        const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
+
+        if (user) {
+          await supabase
+            .from('holdings')
+            .update({ current_price: newPrice, currency: stockData.currency, name: item.name })
+            .eq('id', item.id)
+            .eq('user_id', user.id);
+        }
+
+        return {
+          ...item,
+          currentPrice: newPrice,
+          currency: stockData.currency,
+        };
+      })
+    );
+
+    setHoldings(updatedHoldings);
+    setLoading(false);
+  };
+
   const saveCustomName = async (id: string, newName: string) => {
     if (!newName.trim()) return;
     setHoldings(prev => prev.map(h => h.id === id ? { ...h, name: newName } : h));
@@ -186,7 +295,7 @@ export default function App() {
 
   const clearAllHoldings = async () => {
     if (holdings.length === 0) return;
-    if (window.confirm('Czy na pewno chcesz usunąć WSZYSTKIE pozycje?')) {
+    if (window.confirm('Czy na pewno chcesz usunąć WSZYSTKIE pozycje z portfela?')) {
       if (user) await supabase.from('holdings').delete().eq('user_id', user.id);
       setHoldings([]);
       localStorage.removeItem('kashor_holdings');
@@ -253,11 +362,59 @@ export default function App() {
           });
         }
 
-        setHoldings(importedHoldings);
+        if (user && importedHoldings.length > 0) {
+          await supabase.from('holdings').delete().eq('user_id', user.id);
+          const supabaseRows = importedHoldings.map(h => ({
+            id: h.id,
+            user_id: user.id,
+            ticker: h.ticker,
+            name: h.name,
+            type: h.type,
+            shares: h.shares,
+            buy_price: h.buyPrice,
+            current_price: h.currentPrice,
+            currency: h.currency,
+          }));
+          await supabase.from('holdings').insert(supabaseRows);
+          fetchHoldingsFromSupabase();
+        } else {
+          setHoldings(importedHoldings);
+        }
+
         setLoading(false);
         e.target.value = '';
       }
     });
+  };
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+    setLoading(true);
+
+    if (isForgotPassword) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (error) setAuthError(translateAuthError(error.message));
+      else setAuthSuccess('Wysłano link do zresetowania hasła. Sprawdź e-mail!');
+    } else if (isSignUp) {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) setAuthError(translateAuthError(error.message));
+      else { setAuthSuccess('Konto utworzone! Zaloguj się.'); setIsSignUp(false); }
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) setAuthError(translateAuthError(error.message));
+    }
+    setLoading(false);
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(''); setAuthSuccess(''); setLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) setAuthError(translateAuthError(error.message));
+    else { setAuthSuccess('Hasło zmienione!'); setIsPasswordResetMode(false); }
+    setLoading(false);
   };
 
   const handleLogout = async () => {
@@ -278,13 +435,19 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
+  const rawChartData = holdings.map((h) => {
+    const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
+    return {
+      ticker: h.ticker,
+      name: h.name,
+      value: parseFloat(valuePLN.toFixed(2)),
+      percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
+    };
+  }).sort((a, b) => b.value - a.value);
+
   const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('desc');
-    }
+    if (sortField === field) setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortOrder('desc'); }
   };
 
   const sortedHoldings = [...holdings].sort((a, b) => {
@@ -302,9 +465,89 @@ export default function App() {
     return sortOrder === 'asc' ? comp : -comp;
   });
 
+  if (authLoading) {
+    return (
+      <div style={{ backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <h2>Ładowanie Kashor...</h2>
+      </div>
+    );
+  }
+
+  if (isPasswordResetMode) {
+    return (
+      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', boxSizing: 'border-box' }}>
+        <div style={{ backgroundColor: '#151d30', padding: '40px', borderRadius: '16px', border: '1px solid #1e293b', maxWidth: '400px', width: '100%' }}>
+          <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+            <KeyRound size={48} color="#38bdf8" style={{ marginBottom: '10px' }} />
+            <h1 style={{ margin: 0, fontSize: '24px' }}>Ustaw nowe hasło</h1>
+          </div>
+          <form onSubmit={handleUpdatePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <input type="password" required placeholder="Nowe hasło" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+            {authError && <div style={{ color: '#ef4444', fontSize: '13px' }}>{authError}</div>}
+            {authSuccess && <div style={{ color: '#22c55e', fontSize: '13px' }}>{authSuccess}</div>}
+            <button type="submit" style={{ padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold' }}>Zapisz nowe hasło</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user && !isGuest) {
+    return (
+      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+          <div style={{ backgroundColor: '#151d30', padding: '40px', borderRadius: '16px', border: '1px solid #1e293b', maxWidth: '400px', width: '100%' }}>
+            <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+              <Wallet size={48} color="#38bdf8" style={{ marginBottom: '10px' }} />
+              <h1 style={{ margin: 0, fontSize: '28px' }}>Kashor {APP_VERSION}</h1>
+            </div>
+
+            <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <label style={{ display: 'block', color: '#94a3b8', fontSize: '13px', marginBottom: '6px' }}>Adres E-mail</label>
+                <input type="email" required placeholder="twoj@email.com" value={email} onChange={(e) => setEmail(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }} />
+              </div>
+
+              {!isForgotPassword && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <label style={{ color: '#94a3b8', fontSize: '13px' }}>Hasło</label>
+                    {!isSignUp && <button type="button" onClick={() => setIsForgotPassword(true)} style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '12px', cursor: 'pointer' }}>Zapomniałeś hasła?</button>}
+                  </div>
+                  <input type="password" required placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }} />
+                </div>
+              )}
+
+              {authError && <div style={{ color: '#ef4444', fontSize: '13px' }}>{authError}</div>}
+              {authSuccess && <div style={{ color: '#22c55e', fontSize: '13px' }}>{authSuccess}</div>}
+
+              <button type="submit" disabled={loading} style={{ padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer' }}>
+                {loading ? 'Przetwarzanie...' : isForgotPassword ? 'Wyślij link' : isSignUp ? 'Zarejestruj się' : 'Zaloguj się'}
+              </button>
+            </form>
+
+            <div style={{ textAlign: 'center', marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <button onClick={() => setIsSignUp(!isSignUp)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '13px', textDecoration: 'underline' }}>
+                {isSignUp ? 'Masz już konto? Zaloguj się' : 'Nie masz konta? Zarejestruj się'}
+              </button>
+
+              <button onClick={() => { setIsGuest(true); localStorage.setItem('kashor_is_guest', 'true'); }} style={{ backgroundColor: 'transparent', border: '1px dashed #334155', color: '#38bdf8', padding: '10px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                Kontynuuj bez rejestracji (Lokalnie)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <footer style={{ textAlign: 'center', padding: '10px 0', color: '#475569', fontSize: '12px' }}>
+          Kashor {APP_VERSION} | Kompilacja: {BUILD_TIME}
+        </footer>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', padding: '24px 16px', boxSizing: 'border-box' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto' }}>
+    <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', padding: '24px 16px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
         
         {/* NAGŁÓWEK */}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', borderBottom: '1px solid #1e293b', paddingBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
@@ -314,8 +557,14 @@ export default function App() {
             </div>
             <div>
               <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', color: '#fff' }}>Kashor {APP_VERSION}</h1>
-              <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
-                USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln.toFixed(4)} zł</strong> | EUR/PLN: <strong style={{ color: '#a855f7' }}>{eurPln.toFixed(4)} zł</strong>
+              <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                <span>Status: <strong style={{ color: user ? '#22c55e' : '#eab308' }}>{user ? `Zalogowany (${user.email})` : 'Tryb Lokalny (Gość)'}</strong></span>
+                <span onClick={() => setCurrencyModal({ open: true, code: 'USD', range: '1M' })} style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}>
+                  USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln.toFixed(4)} zł</strong>
+                </span>
+                <span onClick={() => setCurrencyModal({ open: true, code: 'EUR', range: '1M' })} style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}>
+                  EUR/PLN: <strong style={{ color: '#a855f7' }}>{eurPln.toFixed(4)} zł</strong>
+                </span>
               </p>
             </div>
           </div>
@@ -325,11 +574,18 @@ export default function App() {
               <Upload size={16} /> Importuj z XTB (CSV)
               <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
-            <button onClick={clearAllHoldings} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+            <button onClick={refreshPrices} disabled={loading || holdings.length === 0} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#151d30', color: '#38bdf8', fontWeight: '600', fontSize: '13px', cursor: loading || holdings.length === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+              {loading ? 'Odświeżanie...' : 'Odśwież kursy'}
+            </button>
+
+            <button onClick={clearAllHoldings} disabled={holdings.length === 0} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Eraser size={16} /> Wyczyść
             </button>
+
             <button onClick={handleLogout} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#94a3b8', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <LogOut size={16} /> Wyjdź
+              <LogOut size={16} /> {user ? 'Wyloguj' : 'Wyjdź'}
             </button>
           </div>
         </header>
@@ -345,14 +601,66 @@ export default function App() {
             <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700' }}>{totalCostPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł</h2>
           </div>
           <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
-            <span style={{ color: '#64748b', fontSize: '13px' }}>Zysk / Strata</span>
-            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700', color: totalProfitLossPLN >= 0 ? '#22c55e' : '#ef4444' }}>
+            <span style={{ color: '#64748b', fontSize: '13px' }}>Zysk / Strata całkowita</span>
+            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700', color: totalProfitLossPLN >= 0 ? '#22c55e' : '#ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {totalProfitLossPLN >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
               {totalProfitLossPLN >= 0 ? '+' : ''}{totalProfitLossPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł ({totalProfitLossPercent.toFixed(2)}%)
             </h2>
           </div>
         </div>
 
-        {/* FORMULARZ Z AUTOCOMPLETE */}
+        {/* PRZYWRÓCONY MODUŁ WYKRESU ALOKACJI */}
+        {holdings.length > 0 && (
+          <div style={{ backgroundColor: '#151d30', padding: '24px', borderRadius: '16px', marginBottom: '28px', border: '1px solid #1e293b' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+              <PieChartIcon size={20} color="#38bdf8" />
+              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: '700' }}>Struktura i Alokacja Portfela</h3>
+            </div>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', alignItems: 'center' }}>
+              <div style={{ height: '260px', width: '100%' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={rawChartData} cx="50%" cy="50%" innerRadius={60} outerRadius={95} paddingAngle={2} dataKey="value">
+                      {rawChartData.map((_entry, index) => (
+                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} stroke="#151d30" strokeWidth={2} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0b0f19', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc', fontSize: '13px' }}
+                      formatter={(value: any, _name: any, item: any) => [
+                        `${Number(value).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł (${item.payload.percentNum.toFixed(1)}%)`,
+                        item.payload.name
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {rawChartData.map((item, index) => (
+                    <div key={item.ticker} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#0b0f19', border: '1px solid #1e293b', fontSize: '13px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: CHART_COLORS[index % CHART_COLORS.length], flexShrink: 0 }} />
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: '700', color: '#fff', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '170px' }}>{item.name}</span>
+                          <span style={{ fontSize: '11px', color: '#64748b' }}>{item.ticker}</span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontWeight: '600', color: '#38bdf8' }}>{item.percentNum.toFixed(1)}%</div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>{item.value.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* FORMULARZ Z AUTOCOMPLETE (4 TYPY AKTYWÓW) */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
           
           <select
@@ -408,93 +716,10 @@ export default function App() {
             <option value="EUR">EUR</option>
           </select>
 
-          <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer' }}>
-            Dodaj
+          <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Plus size={18} /> Dodaj
           </button>
         </form>
 
-        {/* TABELA POSIADANYCH AKTYWÓW */}
-        <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#0b0f19', color: '#64748b', fontSize: '12px', textTransform: 'uppercase' }}>
-                <th onClick={() => handleSort('ticker')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Nazwa / Symbol <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th onClick={() => handleSort('shares')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Liczba <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th style={{ padding: '14px 18px' }}>Cena zakupu</th>
-                <th style={{ padding: '14px 18px' }}>Aktualny kurs</th>
-                <th onClick={() => handleSort('valuePLN')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Wartość (PLN) <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th onClick={() => handleSort('profitLossPLN')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Wynik <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th style={{ padding: '14px 18px', textAlign: 'center' }}>Akcja</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedHoldings.map((h) => {
-                const valPLN = getPLNValue(h.shares * h.currentPrice, h.currency);
-                const costPLN = getPLNValue(h.shares * h.buyPrice, h.currency);
-                const profitPLN = valPLN - costPLN;
-                const profitPct = costPLN > 0 ? (profitPLN / costPLN) * 100 : 0;
-
-                return (
-                  <tr key={h.id} style={{ borderBottom: '1px solid #1e293b' }}>
-                    <td style={{ padding: '14px 18px' }}>
-                      {editingId === h.id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <input
-                            type="text"
-                            value={editingNameValue}
-                            onChange={(e) => setEditingNameValue(e.target.value)}
-                            style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #38bdf8', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
-                          />
-                          <button onClick={() => saveCustomName(h.id, editingNameValue)} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer' }}>
-                            <Check size={18} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div onClick={() => { setEditingId(h.id); setEditingNameValue(h.name); }} style={{ cursor: 'pointer' }}>
-                          <div style={{ fontWeight: '700', color: '#fff', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span>{h.name}</span>
-                            <Edit2 size={12} color="#475569" />
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#64748b' }}>{h.ticker} • {h.type.toUpperCase()}</div>
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px 18px' }}>{h.shares}</td>
-                    <td style={{ padding: '14px 18px' }}>{h.buyPrice.toFixed(2)} {h.currency}</td>
-                    <td style={{ padding: '14px 18px' }}>{h.currentPrice.toFixed(2)} {h.currency}</td>
-                    <td style={{ padding: '14px 18px', fontWeight: 'bold' }}>{valPLN.toFixed(2)} zł</td>
-                    <td style={{ padding: '14px 18px', color: profitPLN >= 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
-                      {profitPLN >= 0 ? '+' : ''}{profitPLN.toFixed(2)} zł ({profitPct.toFixed(2)}%)
-                    </td>
-                    <td style={{ padding: '14px 18px', textAlign: 'center' }}>
-                      <button onClick={() => removeHolding(h.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-      </div>
-    </div>
-  );
-}
+        {/* TABELA Z DUŻĄ NAZWĄ NA GÓRZE */}
+        <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border:
