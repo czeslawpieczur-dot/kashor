@@ -128,12 +128,20 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
 
 export const getMetaBySymbol = (symbol: string): AssetMeta | undefined => {
   if (!symbol) return undefined;
-  const clean = symbol.trim().toUpperCase();
-  const rawSymbol = clean.replace('.WA', '').replace('.PL', '').replace('.US', '');
+  const clean = symbol.trim().toUpperCase()
+    .replace(/\.PL$/, '.WA')
+    .replace(/\.US$/, '');
+
+  const rawSymbol = clean.replace(/\.WA$/, '').replace(/\.DE$/, '').replace(/\.UK$/, '').replace(/\.L$/, '');
 
   return GLOBAL_DATABASE.find(item => {
     const itemSym = item.symbol.toUpperCase();
-    const itemRaw = itemSym.replace('.WA', '').replace('.PL', '').replace('.US', '');
-    return itemSym === clean || itemRaw === rawSymbol;
+    const itemRaw = itemSym
+      .replace(/\.WA$/, '')
+      .replace(/\.DE$/, '')
+      .replace(/\.UK$/, '')
+      .replace(/\.L$/, '')
+      .replace(/\.US$/, '');
+    return itemSym === clean || itemRaw === rawSymbol || itemSym === symbol.trim().toUpperCase();
   });
 };

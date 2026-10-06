@@ -1,29 +1,40 @@
 import type { AssetType } from '../types';
 
 export const fetchStockPriceAndName = async (ticker: string, fallbackName?: string) => {
-  if (!ticker) return { price: null, name: fallbackName || '', currency: 'PLN', type: 'stock' };
-  
+  if (!ticker) return { price: null, name: fallbackName || '', currency: 'PLN', type: 'stock' as AssetType };
+
   try {
     const cleanTicker = ticker.trim().toUpperCase();
-    const url = `/api/quote?symbol=${cleanTicker}`;
-    
+
+    // v8/chart działa, v7/quote zwraca 401
+    const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${cleanTicker}?interval=1d&range=1d`;
+    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
-      if (data && data.price !== null) {
+      const result = data?.chart?.result?.[0];
+      const meta = result?.meta;
+
+      if (meta && meta.regularMarketPrice != null) {
+        let type: AssetType = 'stock';
+        if (meta.instrumentType === 'ETF') type = 'etf';
+        if (meta.instrumentType === 'CRYPTOCURRENCY' || cleanTicker.includes('-USD')) type = 'crypto';
+        if (meta.instrumentType === 'FUTURE' || cleanTicker.includes('=F')) type = 'commodity';
+
         return {
-          price: data.price,
-          name: data.name || fallbackName || cleanTicker,
-          currency: data.currency || 'PLN',
-          type: (data.type === 'etf' ? 'etf' : 'stock') as AssetType,
+          price: meta.regularMarketPrice,
+          name: meta.shortName || meta.longName || fallbackName || cleanTicker,
+          currency: meta.currency || 'PLN',
+          type,
         };
       }
     }
   } catch (err) {
-    console.error('Błąd pobierania z Vercel API:', err);
+    console.error('Błąd pobierania z Yahoo API:', err);
   }
-  
-  return { price: null, name: fallbackName || ticker, currency: 'PLN', type: 'stock' };
+
+  return { price: null, name: fallbackName || ticker, currency: 'PLN', type: 'stock' as AssetType };
 };
 
 export const fetchNbpRates = async () => {

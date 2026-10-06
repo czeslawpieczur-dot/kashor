@@ -14,7 +14,7 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.3.2';
+const APP_VERSION = 'v2.3.3';
 const BUILD_TIME = '2026-10-06 23:58';
 
 const CHART_COLORS = [
@@ -24,6 +24,14 @@ const CHART_COLORS = [
 ];
 
 const getTodayString = () => new Date().toISOString().split('T')[0];
+
+/** Normalizacja tickerów z XTB / ręcznych (.PL → .WA, .US → bez suffixu) */
+const normalizeTicker = (t: string): string => {
+  let s = t.trim().toUpperCase();
+  if (s.endsWith('.PL')) s = s.replace(/\.PL$/, '.WA');
+  if (s.endsWith('.US')) s = s.replace(/\.US$/, '');
+  return s;
+};
 
 const translateAuthError = (message: string): string => {
   const msg = message.toLowerCase();
@@ -125,7 +133,7 @@ export default function App() {
         try { 
           const parsed = JSON.parse(saved);
           const formatted = parsed.map((item: any) => {
-            const cleanTicker = (item.ticker || '').trim().toUpperCase();
+            const cleanTicker = normalizeTicker(item.ticker || '');
             const meta = getMetaBySymbol(cleanTicker);
             let finalName = item.name;
             
@@ -134,6 +142,7 @@ export default function App() {
             }
             return {
               ...item,
+              ticker: cleanTicker,
               name: finalName || cleanTicker,
               purchaseDate: item.purchaseDate || getTodayString()
             };
@@ -189,7 +198,7 @@ export default function App() {
     }
     if (data) {
       const formatted: Holding[] = data.map(item => {
-        const cleanTicker = (item.ticker || '').trim().toUpperCase();
+        const cleanTicker = normalizeTicker(item.ticker || '');
         const meta = getMetaBySymbol(cleanTicker);
         
         let finalName = item.name;
@@ -246,41 +255,56 @@ export default function App() {
     e.preventDefault();
     if (!ticker || !shares || !buyPrice) return;
 
+    const numShares = parseFloat(shares.replace(',', '.'));
+    const numPrice = parseFloat(buyPrice.replace(',', '.'));
+
+    if (isNaN(numShares) || numShares <= 0) {
+      alert('Liczba akcji musi być większa od zera.');
+      return;
+    }
+    if (isNaN(numPrice) || numPrice <= 0) {
+      alert('Cena zakupu musi być większa od zera.');
+      return;
+    }
+
     setLoading(true);
-    const numShares = parseFloat(shares);
-    const numPrice = parseFloat(buyPrice);
-    const cleanTicker = ticker.trim().toUpperCase();
+    const cleanTicker = normalizeTicker(ticker);
 
     const stockData = await fetchStockPriceAndName(cleanTicker, selectedName);
     const meta = getMetaBySymbol(cleanTicker);
+
     let resolvedName = stockData.name;
     if (!resolvedName || resolvedName.toUpperCase() === cleanTicker || resolvedName.includes('.WA')) {
       if (meta?.name) resolvedName = meta.name;
     }
 
-    const newId = (Date.now() + Math.floor(Math.random() * 100000)).toString();
+    const newId = crypto.randomUUID();
 
     const newHoldingObj: Holding = {
       id: newId,
       ticker: cleanTicker,
       name: resolvedName || cleanTicker,
-      type: assetType,
+      type: assetType || stockData.type || meta?.type || 'stock',
       shares: numShares,
       buyPrice: numPrice,
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
-      currency: currency || stockData.currency,
+      currency: currency || stockData.currency || meta?.currency || 'PLN',
       purchaseDate: purchaseDate || getTodayString(),
     };
+
+    if (stockData.price === null) {
+      alert(`Nie udało się pobrać aktualnego kursu dla ${cleanTicker}. Użyto ceny zakupu.`);
+    }
 
     setHoldings(prev => [...prev, newHoldingObj]);
 
     if (user) {
+      // NIE wysyłamy id – baza generuje UUID
       const { error } = await supabase.from('holdings').insert([{
-        id: newId,
         user_id: user.id,
         ticker: cleanTicker,
         name: newHoldingObj.name,
-        type: assetType,
+        type: newHoldingObj.type,
         shares: numShares,
         buy_price: numPrice,
         current_price: newHoldingObj.currentPrice,
@@ -291,6 +315,7 @@ export default function App() {
       if (error) {
         console.error('Błąd zapisu w Supabase:', error);
         alert(`Błąd dodawania: ${error.message}`);
+        setHoldings(prev => prev.filter(h => h.id !== newId));
       } else {
         await fetchHoldingsFromSupabase();
       }
@@ -322,7 +347,8 @@ export default function App() {
       pricesMap[tickerCode] = stockData;
       if (stockData.price !== null) successCount++;
       
-      await new Promise(resolve => setTimeout(resolve, 250));
+      // małe opóźnienie, żeby nie walić w rate-limit
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
 
     const updatedHoldings = holdings.map((item) => {
@@ -333,17 +359,24 @@ export default function App() {
         ...item,
         currentPrice: newPrice,
         currency: (stockData && stockData.currency) || item.currency,
+        name: (stockData && stockData.name && stockData.name !== item.ticker) ? stockData.name : item.name,
       };
     });
 
     if (user) {
-      for (const item of updatedHoldings) {
-        await supabase
-          .from('holdings')
-          .update({ current_price: item.currentPrice, currency: item.currency })
-          .eq('id', item.id)
-          .eq('user_id', user.id);
-      }
+      await Promise.all(
+        updatedHoldings.map(item =>
+          supabase
+            .from('holdings')
+            .update({ 
+              current_price: item.currentPrice, 
+              currency: item.currency,
+              name: item.name 
+            })
+            .eq('id', item.id)
+            .eq('user_id', user.id)
+        )
+      );
     }
 
     setHoldings(updatedHoldings);
@@ -351,8 +384,10 @@ export default function App() {
     
     if (successCount === 0) {
       alert('Nie udało się pobrać aktualnych kursów z serwerów giełdowych. Spróbuj ponownie za chwilę.');
+    } else if (successCount < uniqueTickers.length) {
+      alert(`Zaktualizowano częściowo: ${successCount} z ${uniqueTickers.length} spółek.`);
     } else {
-      alert(`Pomyślnie zaktualizowano kursy z giełdy! (Zaktualizowano ${successCount} unikalnych spółek)`);
+      alert(`Pomyślnie zaktualizowano kursy z giełdy! (${successCount} unikalnych spółek)`);
     }
   };
 
@@ -466,9 +501,7 @@ export default function App() {
           if (!dateMatch) continue;
           const parsedDate = dateMatch[0];
 
-          let rawTicker = currentTicker;
-          if (rawTicker.endsWith('.PL')) rawTicker = rawTicker.replace('.PL', '.WA');
-          else if (rawTicker.endsWith('.US')) rawTicker = rawTicker.replace('.US', '');
+          const rawTicker = normalizeTicker(currentTicker);
 
           const volumeStr = row[volumeCol] ? row[volumeCol].toString() : '';
           const priceStr = row[openPriceCol] ? row[openPriceCol].toString() : '';
@@ -480,7 +513,7 @@ export default function App() {
 
           let inferredCurrency = 'PLN';
           if (rawTicker.endsWith('.DE')) inferredCurrency = 'EUR';
-          if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.US') || !rawTicker.includes('.')) inferredCurrency = 'USD';
+          if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.L') || !rawTicker.includes('.')) inferredCurrency = 'USD';
 
           if (!apiCache[rawTicker]) {
             try {
@@ -496,7 +529,7 @@ export default function App() {
                 price: stockData.price !== null ? stockData.price : price,
                 currency: stockData.currency !== 'PLN' ? stockData.currency : inferredCurrency
               };
-              await new Promise(resolve => setTimeout(resolve, 250));
+              await new Promise(resolve => setTimeout(resolve, 200));
             } catch (err) {
               const meta = getMetaBySymbol(rawTicker);
               apiCache[rawTicker] = {
@@ -509,7 +542,7 @@ export default function App() {
           }
 
           const cachedData = apiCache[rawTicker];
-          const newId = (Date.now() + i).toString();
+          const newId = crypto.randomUUID();
 
           importedHoldings.push({
             id: newId,
@@ -536,8 +569,8 @@ export default function App() {
             await supabase.from('holdings').delete().eq('user_id', user.id);
           }
           
+          // NIE wysyłamy id – baza generuje UUID
           const supabaseRows = importedHoldings.map(h => ({
-            id: h.id,
             user_id: user.id,
             ticker: h.ticker,
             name: h.name,
