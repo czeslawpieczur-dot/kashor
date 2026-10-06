@@ -767,7 +767,7 @@ export default function App() {
         history={currencyHistory}
         loading={currencyHistoryLoading}
         onClose={() => setCurrencyModal({ ...currencyModal, open: false })}
-        onRangeChange={(range) => setCurrencyModal({ ...currencyModal, range })}
+        onRangeChange={(range: '1M' | '3M' | '1R') => setCurrencyModal({ ...currencyModal, range })}
       />
 
       {/* STOPKA */}
