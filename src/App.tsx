@@ -1,12 +1,49 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown, X, LineChart as LineChartIcon, Search, KeyRound } from 'lucide-react';
+import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown, X, LineChart as LineChartIcon, Search, KeyRound, Edit2, Check } from 'lucide-react';
 import Papa from 'papaparse';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.5.1';
-const BUILD_TIME = '2026-10-06 18:15';
+const APP_VERSION = 'v1.5.3';
+const BUILD_TIME = '2026-10-06 18:25';
+
+// SŁOWNIK POPULARNYCH SPÓŁEK (GPW / USA / ETF)
+const KNOWN_NAMES: { [key: string]: string } = {
+  'PKO.WA': 'PKO Bank Polski',
+  'PEO.WA': 'Bank Pekao',
+  'KGH.WA': 'KGHM Polska Miedź',
+  'PKN.WA': 'ORLEN',
+  'CDR.WA': 'CD Projekt',
+  'DNP.WA': 'Dino Polska',
+  'LPP.WA': 'LPP (Reserved)',
+  'ALE.WA': 'Allegro',
+  'CPS.WA': 'Cyfrowy Polsat',
+  'PZU.WA': 'PZU SA',
+  'KRU.WA': 'KRUK SA',
+  'SPL.WA': 'Santander Bank Polska',
+  'MBK.WA': 'mBank',
+  'ALR.WA': 'Alior Bank',
+  'PCO.WA': 'Pepco Group',
+  'ACP.WA': 'Asseco Poland',
+  'JSW.WA': 'JSW',
+  'TPE.WA': 'Tauron PE',
+  'PGE.WA': 'PGE',
+  'XTB.WA': 'XTB SA',
+  'ASB.WA': 'ASBISc Enterprises',
+  'NEU.WA': 'Neuca',
+  'ATR.WA': 'Atrem',
+  'SNT.WA': 'Synektik',
+  'DOM.WA': 'Dom Development',
+  'AAPL': 'Apple Inc.',
+  'NVDA': 'NVIDIA Corporation',
+  'MSFT': 'Microsoft Corporation',
+  'AMZN': 'Amazon.com Inc.',
+  'GOOGL': 'Alphabet Inc.',
+  'TSLA': 'Tesla Inc.',
+  'META': 'Meta Platforms',
+  'AMD': 'Advanced Micro Devices',
+};
 
 interface Holding {
   id: string;
@@ -39,7 +76,6 @@ const CHART_COLORS = [
   '#8b5cf6', '#d946ef', '#64748b'
 ];
 
-// TŁUMACZENIE BŁĘDÓW SUPABASE NA JĘZYK POLSKI
 const translateAuthError = (message: string): string => {
   const msg = message.toLowerCase();
   if (msg.includes('invalid login credentials')) return 'Nieprawidłowy e-mail lub hasło.';
@@ -78,6 +114,10 @@ export default function App() {
   const [currency, setCurrency] = useState('PLN');
   const [loading, setLoading] = useState(false);
 
+  // EDYCJA NAZWY W TABELI
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
+
   // AUTOCOMPLETE TICKERA
   const [suggestions, setSuggestions] = useState<TickerSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -97,7 +137,7 @@ export default function App() {
   const [sortField, setSortField] = useState<SortField>('valuePLN');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
-  // SŁOWNIK NAZW SPÓŁEK
+  // SŁOWNIK NAZW SPÓŁEK LOKALNY
   const [companyNames, setCompanyNames] = useState<{ [ticker: string]: string }>(() => {
     try {
       const saved = localStorage.getItem('kashor_names');
@@ -168,15 +208,18 @@ export default function App() {
     if (error) {
       console.error('Błąd pobierania z bazy:', error);
     } else if (data) {
-      const formatted: Holding[] = data.map((item) => ({
-        id: item.id,
-        ticker: item.ticker,
-        name: item.name || companyNames[item.ticker] || item.ticker,
-        shares: Number(item.shares),
-        buyPrice: Number(item.buy_price),
-        currentPrice: Number(item.current_price),
-        currency: item.currency || 'PLN',
-      }));
+      const formatted: Holding[] = data.map((item) => {
+        const bestName = item.name || KNOWN_NAMES[item.ticker] || companyNames[item.ticker] || item.ticker;
+        return {
+          id: item.id,
+          ticker: item.ticker,
+          name: bestName,
+          shares: Number(item.shares),
+          buyPrice: Number(item.buy_price),
+          currentPrice: Number(item.current_price),
+          currency: item.currency || 'PLN',
+        };
+      });
       setHoldings(formatted);
     }
     setLoading(false);
@@ -275,37 +318,55 @@ export default function App() {
   };
 
   const fetchStockData = async (symbol: string) => {
+    const cleanSymbol = symbol.trim().toUpperCase();
+    const known = KNOWN_NAMES[cleanSymbol] || companyNames[cleanSymbol];
+
     try {
-      const cleanSymbol = symbol.trim().toUpperCase();
       const response = await fetch(
         `https://corsproxy.io/?${encodeURIComponent(
           `https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`
         )}`
       );
 
-      if (!response.ok) return { price: null, name: cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
+      if (response.ok) {
+        const data = await response.json();
+        const meta = data?.chart?.result?.[0]?.meta;
 
-      const data = await response.json();
-      const meta = data?.chart?.result?.[0]?.meta;
+        const price = meta?.regularMarketPrice;
+        const fetchedName = meta?.shortName || meta?.longName;
+        let detectedCurrency = meta?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
+        if (detectedCurrency === 'GBp') detectedCurrency = 'GBP';
 
-      const price = meta?.regularMarketPrice;
-      const fetchedName = meta?.shortName || meta?.longName || cleanSymbol;
-      let detectedCurrency = meta?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
-      if (detectedCurrency === 'GBp') detectedCurrency = 'GBP';
+        const finalName = selectedName || fetchedName || known || cleanSymbol;
 
-      const finalName = selectedName || fetchedName;
+        if (finalName && finalName !== cleanSymbol) {
+          setCompanyNames(prev => ({ ...prev, [cleanSymbol]: finalName }));
+        }
 
-      if (finalName && finalName !== cleanSymbol) {
-        setCompanyNames(prev => ({ ...prev, [cleanSymbol]: finalName }));
+        return { price: price ? parseFloat(price) : null, name: finalName, currency: detectedCurrency };
       }
-
-      return { price: price ? parseFloat(price) : null, name: finalName, currency: detectedCurrency };
     } catch (error) {
-      return { price: null, name: selectedName || symbol, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
+      console.error(error);
     }
+
+    return { price: null, name: selectedName || known || cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
   };
 
-  // OBSŁUGA LOGOWANIA, REJESTRACJI I RESETOWANIA HASŁA
+  const saveCustomName = async (id: string, newName: string) => {
+    if (!newName.trim()) return;
+    setHoldings(prev => prev.map(h => h.id === id ? { ...h, name: newName } : h));
+
+    const targetHolding = holdings.find(h => h.id === id);
+    if (targetHolding) {
+      setCompanyNames(prev => ({ ...prev, [targetHolding.ticker]: newName }));
+    }
+
+    if (user) {
+      await supabase.from('holdings').update({ name: newName }).eq('id', id).eq('user_id', user.id);
+    }
+    setEditingId(null);
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
@@ -377,7 +438,7 @@ export default function App() {
     const newId = Date.now().toString();
 
     const selectedCurrency = currency || stockData.currency;
-    const finalName = selectedName || stockData.name || cleanTicker;
+    const finalName = selectedName || KNOWN_NAMES[cleanTicker] || stockData.name || cleanTicker;
 
     const newHoldingObj: Holding = {
       id: newId,
@@ -496,11 +557,12 @@ export default function App() {
           const avgBuyPrice = data.totalCost / data.totalShares;
           const id = Date.now().toString() + Math.random().toString();
           const stockData = await fetchStockData(symbol);
+          const nameToUse = KNOWN_NAMES[symbol] || stockData.name || symbol;
 
           importedHoldings.push({
             id,
             ticker: symbol,
-            name: stockData.name,
+            name: nameToUse,
             shares: parseFloat(data.totalShares.toFixed(4)),
             buyPrice: parseFloat(avgBuyPrice.toFixed(2)),
             currentPrice: parseFloat(data.latestCurrentPrice.toFixed(2)),
@@ -512,7 +574,7 @@ export default function App() {
               id,
               user_id: user.id,
               ticker: symbol,
-              name: stockData.name,
+              name: nameToUse,
               shares: parseFloat(data.totalShares.toFixed(4)),
               buy_price: parseFloat(avgBuyPrice.toFixed(2)),
               current_price: parseFloat(data.latestCurrentPrice.toFixed(2)),
@@ -599,7 +661,7 @@ export default function App() {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
     return {
       ticker: h.ticker,
-      name: companyNames[h.ticker] || h.name || h.ticker,
+      name: companyNames[h.ticker] || KNOWN_NAMES[h.ticker] || h.name || h.ticker,
       value: parseFloat(valuePLN.toFixed(2)),
       percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
     };
@@ -638,7 +700,6 @@ export default function App() {
     );
   }
 
-  // FORMULARZ NOWEGO HASŁA (PO KLIKNIĘCIU W LINK W MAILU)
   if (isPasswordResetMode) {
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', boxSizing: 'border-box' }}>
@@ -689,7 +750,6 @@ export default function App() {
     );
   }
 
-  // EKRAN LOGOWANIA / REJESTRACJI / ZAPOMNIANEGO HASŁA
   if (!user && !isGuest) {
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
@@ -1086,7 +1146,7 @@ export default function App() {
           </button>
         </form>
 
-        {/* TABELA POSIADANYCH AKCJI */}
+        {/* TABELA POSIADANYCH AKCJI Z EDYCJĄ NAZW */}
         <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
@@ -1134,13 +1194,36 @@ export default function App() {
                     const profitLossPLN = holdingValuePLN - holdingCostPLN;
                     const profitLossPercent = holdingCostPLN > 0 ? (profitLossPLN / holdingCostPLN) * 100 : 0;
                     const isProfit = profitLossPLN >= 0;
-                    const displayName = companyNames[h.ticker] || h.name || h.ticker;
+                    const displayName = companyNames[h.ticker] || KNOWN_NAMES[h.ticker] || h.name || h.ticker;
 
                     return (
                       <tr key={h.id} style={{ borderBottom: '1px solid #1e293b' }}>
                         <td style={{ padding: '14px 18px' }}>
                           <div style={{ fontWeight: '700', color: '#fff', fontSize: '14px' }}>{h.ticker}</div>
-                          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>{displayName}</div>
+                          
+                          {/* SZYBKA EDYCJA NAZWY */}
+                          {editingId === h.id ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                              <input
+                                type="text"
+                                value={editingNameValue}
+                                onChange={(e) => setEditingNameValue(e.target.value)}
+                                style={{ padding: '2px 6px', borderRadius: '4px', border: '1px solid #38bdf8', backgroundColor: '#0b0f19', color: '#fff', fontSize: '12px' }}
+                              />
+                              <button onClick={() => saveCustomName(h.id, editingNameValue)} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', padding: 0 }}>
+                                <Check size={16} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div
+                              onClick={() => { setEditingId(h.id); setEditingNameValue(displayName); }}
+                              style={{ fontSize: '12px', color: '#64748b', marginTop: '2px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                              title="Kliknij, aby zmienić nazwę"
+                            >
+                              <span>{displayName}</span>
+                              <Edit2 size={12} color="#475569" />
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.shares}</td>
                         <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.buyPrice.toFixed(2)} {currencySymbol}</td>
