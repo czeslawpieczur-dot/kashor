@@ -13,8 +13,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.1.3';
-const BUILD_TIME = '2026-10-06 21:30';
+const APP_VERSION = 'v2.1.4';
+const BUILD_TIME = '2026-10-06 21:50';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -247,7 +247,7 @@ export default function App() {
       if (meta?.name) resolvedName = meta.name;
     }
 
-    const newId = Date.now().toString();
+    const newId = Date.now().toString() + Math.floor(Math.random() * 1000).toString();
 
     const newHoldingObj: Holding = {
       id: newId,
@@ -346,9 +346,11 @@ export default function App() {
     }
   };
 
- const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setLoading(true);
 
     Papa.parse(file, {
       header: false,
@@ -357,7 +359,11 @@ export default function App() {
       delimitersToGuess: [',', ';', '\t', '|'],
       complete: async (results: Papa.ParseResult<string[]>) => {
         const rows = results.data;
-        if (!rows || rows.length === 0) return;
+        if (!rows || rows.length === 0) {
+          alert('Plik jest pusty lub uszkodzony.');
+          setLoading(false);
+          return;
+        }
 
         let headerIndex = -1;
         for (let i = 0; i < rows.length; i++) {
@@ -369,14 +375,15 @@ export default function App() {
         }
 
         if (headerIndex === -1) {
-          alert('Nie rozpoznałem nagłówków w pliku CSV z XTB.');
+          alert('Nie rozpoznałem nagłówków w pliku CSV z XTB. Upewnij się, że eksportujesz zakładkę Open Positions.');
+          setLoading(false);
           return;
         }
 
         const headers = rows[headerIndex].map((h) => h ? h.replace(/"/g, '').trim().toLowerCase() : '');
         
         let tickerCol = headers.indexOf('ticker');
-        if (tickerCol === -1) tickerCol = headers.findIndex(h => h === 'symbol' || h === 'instrument');
+        if (tickerCol === -1) tickerCol = headers.findIndex(h => h === 'symbol' || h === 'instrument' || h.includes('instrument'));
         
         let volumeCol = headers.findIndex(h => h.includes('volume') || h.includes('wolumen') || h.includes('ilość') || h.includes('ilosc'));
         let openPriceCol = headers.findIndex(h => h.includes('open price') || h.includes('cena otwarcia'));
@@ -384,30 +391,32 @@ export default function App() {
 
         if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) {
           alert('Plik CSV nie zawiera wszystkich wymaganych kolumn (Ticker, Volume, Open Price).');
+          setLoading(false);
           return;
         }
 
-        setLoading(true);
         const importedHoldings: Holding[] = [];
-        
-        // Zmienna pamiętająca ticker dla wierszy z poszczególnymi transzami (gdzie komórka tickera jest pusta)
         let currentTicker = '';
-        // Pamięć podręczna, żeby nie odpytywać API wiele razy o tę samą spółkę
         const apiCache: Record<string, any> = {};
 
         for (let i = headerIndex + 1; i < rows.length; i++) {
           const row = rows[i];
           if (!row) continue;
 
-          const rowTickerCell = row[tickerCol] ? row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase() : '';
-          
-          // Jeśli wiersz ma ticker (np. wiersz podsumowujący spółkę), zapamiętujemy go
-          if (rowTickerCell && !rowTickerCell.includes('SUMA') && !rowTickerCell.includes('TOTAL')) {
-            currentTicker = rowTickerCell;
+          // Obsługa "zlepionych" tickerów z Excela
+          const cellTicker = row[tickerCol] ? row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase() : '';
+          if (cellTicker && !cellTicker.includes('SUMA') && !cellTicker.includes('TOTAL') && !cellTicker.includes('IKZE')) {
+            currentTicker = cellTicker;
           }
-
-          // Jeśli nie mamy żadnego tickera w pamięci, omijamy wiersz
           if (!currentTicker) continue;
+
+          // KLUCZOWY FIX: Weryfikujemy format daty. Wiersze podsumowujące (np. SUMY) nie mają pełnej daty transakcji!
+          const dateStr = dateCol !== -1 && row[dateCol] ? row[dateCol].toString() : '';
+          const dateMatch = dateStr.match(/\d{4}-\d{2}-\d{2}/);
+          
+          // Jeśli wiersz nie ma daty, pomijamy go z automatu - to musi być ogólne podsumowanie, a nie nasza transakcja
+          if (!dateMatch) continue;
+          const parsedDate = dateMatch[0];
 
           let rawTicker = currentTicker;
           if (rawTicker.endsWith('.PL')) rawTicker = rawTicker.replace('.PL', '.WA');
@@ -419,37 +428,40 @@ export default function App() {
           const volume = parseFloat(volumeStr.replace(',', '.'));
           const price = parseFloat(priceStr.replace(',', '.'));
 
-          // Omijamy wiersze podsumowujące (nie mają konkretnej ceny zakupu)
           if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
 
-          let parsedDate = getTodayString();
-          if (dateCol !== -1 && row[dateCol]) {
-            const dateMatch = row[dateCol].toString().match(/\d{4}-\d{2}-\d{2}/);
-            if (dateMatch) {
-              parsedDate = dateMatch[0];
-            }
-          }
-
-          // Pobieranie danych z cache lub z API
+          // Cache API (żeby import z XTB był błyskawiczny)
           if (!apiCache[rawTicker]) {
-            const stockData = await fetchStockPriceAndName(rawTicker);
-            const meta = getMetaBySymbol(rawTicker);
-            let resolvedName = stockData.name;
-            if (!resolvedName || resolvedName.toUpperCase() === rawTicker || resolvedName.includes('.WA')) {
-              if (meta?.name) resolvedName = meta.name;
+            try {
+              const stockData = await fetchStockPriceAndName(rawTicker);
+              const meta = getMetaBySymbol(rawTicker);
+              let resolvedName = stockData.name;
+              if (!resolvedName || resolvedName.toUpperCase() === rawTicker || resolvedName.includes('.WA')) {
+                if (meta?.name) resolvedName = meta.name;
+              }
+              apiCache[rawTicker] = {
+                name: resolvedName || rawTicker,
+                type: stockData.type,
+                price: stockData.price,
+                currency: stockData.currency
+              };
+            } catch (err) {
+              // W razie awarii API dodajemy wartość domyślną i jedziemy dalej
+              const meta = getMetaBySymbol(rawTicker);
+              apiCache[rawTicker] = {
+                name: meta?.name || rawTicker,
+                type: meta?.type || 'stock',
+                price: price,
+                currency: meta?.currency || 'PLN'
+              };
             }
-            apiCache[rawTicker] = {
-              name: resolvedName || rawTicker,
-              type: stockData.type,
-              price: stockData.price,
-              currency: stockData.currency
-            };
           }
 
           const cachedData = apiCache[rawTicker];
+          const newId = Date.now().toString() + Math.floor(Math.random() * 100000).toString();
 
           importedHoldings.push({
-            id: Date.now().toString() + Math.random(),
+            id: newId,
             ticker: rawTicker,
             name: cachedData.name,
             type: cachedData.type,
@@ -461,7 +473,15 @@ export default function App() {
           });
         }
 
-        if (user && importedHoldings.length > 0) {
+        if (importedHoldings.length === 0) {
+          alert('Plik został załadowany, ale nie znaleziono w nim szczegółowych transakcji (sprawdź format danych).');
+          setLoading(false);
+          e.target.value = '';
+          return;
+        }
+
+        // Pomyślny import: zapisujemy do bazy danych
+        if (user) {
           await supabase.from('holdings').delete().eq('user_id', user.id);
           const supabaseRows = importedHoldings.map(h => ({
             id: h.id,
@@ -481,8 +501,9 @@ export default function App() {
           setHoldings(importedHoldings);
         }
 
+        alert(`Sukces! Poprawnie zaimportowano ${importedHoldings.length} pojedynczych transakcji z XTB.`);
         setLoading(false);
-        e.target.value = ''; // Reset inputa
+        e.target.value = '';
       }
     });
   };
@@ -904,12 +925,12 @@ export default function App() {
             </div>
             
             <ol style={{ paddingLeft: '20px', margin: 0, color: '#94a3b8', fontSize: '14px', lineHeight: '1.7' }}>
-              <li>Zaloguj się do **xStation 5** na komputerze.</li>
-              <li>Wybierz **Moje Transakcje** w lewym pionowym menu.</li>
-              <li>W prawym górnym rogu kliknij przycisk **Eksport** i wybierz Excel (XLSX).</li>
-              <li>Otwórz plik na komputerze i przejdź do zakładki **Open Positions** na dole ekranu.</li>
+              <li>Zaloguj się do platformy **xStation 5** na komputerze.</li>
+              <li>Wybierz zakładkę **Moje Transakcje** w lewym pionowym menu.</li>
+              <li>W prawym górnym rogu kliknij **Eksport** i wybierz format Excel (XLSX).</li>
+              <li>Otwórz plik i przejdź do zakładki **Open Positions** (na dole ekranu).</li>
               <li>Kliknij **Plik &gt; Zapisz jako...** i wybierz format **Tekst CSV (.csv)**.</li>
-              <li>Wgraj ten nowo zapisany plik do aplikacji.</li>
+              <li>Zaimportuj wygenerowany plik do Kashora.</li>
             </ol>
 
             <button onClick={() => setShowXtbHelp(false)} style={{ marginTop: '20px', width: '100%', padding: '10px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer' }}>
