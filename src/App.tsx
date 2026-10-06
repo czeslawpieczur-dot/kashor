@@ -5,8 +5,8 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recha
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.2.1';
-const BUILD_TIME = '2026-10-06 15:10';
+const APP_VERSION = 'v1.2.2';
+const BUILD_TIME = '2026-10-06 15:15';
 
 interface Holding {
   id: string;
@@ -102,7 +102,7 @@ export default function App() {
       const formatted: Holding[] = data.map((item) => ({
         id: item.id,
         ticker: item.ticker,
-        name: item.name || item.ticker,
+        name: item.ticker,
         shares: Number(item.shares),
         buyPrice: Number(item.buy_price),
         currentPrice: Number(item.current_price),
@@ -133,19 +133,18 @@ export default function App() {
       const cleanSymbol = symbol.trim().toUpperCase();
       const response = await fetch(
         `https://corsproxy.io/?${encodeURIComponent(
-          `https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}`
+          `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${cleanSymbol}?modules=price`
         )}`
       );
-      if (!response.ok) return { price: null, name: cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
-      const data = await response.json();
-      const result = data?.chart?.result?.[0];
-      const price = result?.meta?.regularMarketPrice;
-      const name = result?.meta?.shortName || result?.meta?.longName || cleanSymbol;
       
-      let currency = result?.meta?.currency || 'PLN';
-      if (!cleanSymbol.endsWith('.WA') && (currency === 'PLN' || !currency)) {
-        currency = 'USD';
-      }
+      if (!response.ok) return { price: null, name: cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
+      
+      const data = await response.json();
+      const priceModule = data?.quoteSummary?.result?.[0]?.price;
+      
+      const price = priceModule?.regularMarketPrice?.raw || priceModule?.regularMarketPrice;
+      const name = priceModule?.shortName || priceModule?.longName || priceModule?.symbol || cleanSymbol;
+      let currency = priceModule?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
 
       return { price: price ? parseFloat(price) : null, name, currency };
     } catch (error) {
@@ -376,6 +375,7 @@ export default function App() {
       holdings.map(async (item) => {
         const stockData = await fetchStockData(item.ticker);
         const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
+        const newName = stockData.name && stockData.name !== item.ticker ? stockData.name : item.name || item.ticker;
 
         if (user) {
           await supabase
@@ -387,7 +387,7 @@ export default function App() {
 
         return {
           ...item,
-          name: stockData.name,
+          name: newName,
           currentPrice: newPrice,
           currency: stockData.currency,
         };
@@ -408,7 +408,6 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
-  // PRZYGOTOWANIE DANYCH DLA CZYTELNEGO WYKRESU
   const rawChartData = holdings.map((h) => {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
     return {
@@ -419,7 +418,6 @@ export default function App() {
     };
   }).sort((a, b) => b.value - a.value);
 
-  // GRUPOWANIE MAŁYCH POZYCJI (<1.5% PORTFELA) DLA CZYTELNOŚCI LEGENDY
   const mainItems = rawChartData.filter(item => item.percentNum >= 1.5);
   const smallItems = rawChartData.filter(item => item.percentNum < 1.5);
 
@@ -447,7 +445,6 @@ export default function App() {
     );
   }
 
-  // EKRAN LOGOWANIA / REJESTRACJI
   if (!user && !isGuest) {
     return (
       <div style={{ fontFamily: 'system-ui, sans-serif', backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
@@ -550,7 +547,6 @@ export default function App() {
     );
   }
 
-  // EKRAN GŁÓWNY
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', boxSizing: 'border-box' }}>
       <div style={{ maxWidth: '1000px', margin: '0 auto', width: '100%' }}>
@@ -666,7 +662,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* MODUŁ WYKRESU ALOKACJI PORTFELA */}
         {holdings.length > 0 && (
           <div style={{ backgroundColor: '#1e293b', padding: '24px', borderRadius: '12px', marginBottom: '30px', border: '1px solid #334155' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '15px' }}>
@@ -704,7 +699,6 @@ export default function App() {
           </div>
         )}
 
-        {/* FORMULARZ DODAWANIA AKCJI */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', marginBottom: '30px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #334155' }}>
           <input
             type="text"
@@ -733,7 +727,6 @@ export default function App() {
           </button>
         </form>
 
-        {/* TABELA POSIADANYCH AKCJI */}
         <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', overflow: 'hidden', border: '1px solid #334155' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
