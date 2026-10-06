@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown, X, LineChart as LineChartIcon, Search } from 'lucide-react';
 import Papa from 'papaparse';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.4.0';
-const BUILD_TIME = '2026-10-06 15:35';
+const APP_VERSION = 'v1.5.0';
+const BUILD_TIME = '2026-10-06 15:45';
 
 interface Holding {
   id: string;
@@ -16,6 +16,18 @@ interface Holding {
   buyPrice: number;
   currentPrice: number;
   currency: string;
+}
+
+interface TickerSuggestion {
+  symbol: string;
+  name: string;
+  exchDisp?: string;
+  typeDisp?: string;
+}
+
+interface CurrencyHistoryPoint {
+  date: string;
+  rate: number;
 }
 
 type SortField = 'ticker' | 'shares' | 'valuePLN' | 'profitLossPLN';
@@ -42,18 +54,34 @@ export default function App() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [usdPln, setUsdPln] = useState<number>(3.88);
   const [eurPln, setEurPln] = useState<number>(4.28);
-  
+
   const [ticker, setTicker] = useState('');
+  const [selectedName, setSelectedName] = useState('');
   const [shares, setShares] = useState('');
   const [buyPrice, setBuyPrice] = useState('');
   const [currency, setCurrency] = useState('PLN');
   const [loading, setLoading] = useState(false);
 
-  // Stan sortowania tabeli
+  // AUTOCOMPLETE TICKERA
+  const [suggestions, setSuggestions] = useState<TickerSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // MODAL WYKRESU WALUT (NBP)
+  const [currencyModal, setCurrencyModal] = useState<{ open: boolean; code: 'USD' | 'EUR'; range: '1M' | '3M' | '1R' }>({
+    open: false,
+    code: 'USD',
+    range: '1M',
+  });
+  const [currencyHistory, setCurrencyHistory] = useState<CurrencyHistoryPoint[]>([]);
+  const [currencyHistoryLoading, setCurrencyHistoryLoading] = useState(false);
+
+  // SORTOWANIE
   const [sortField, setSortField] = useState<SortField>('valuePLN');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
-  // Slownik nazw spolek w pamieci podręcznej
+  // SŁOWNIK NAZW SPÓŁEK
   const [companyNames, setCompanyNames] = useState<{ [ticker: string]: string }>(() => {
     try {
       const saved = localStorage.getItem('kashor_names');
@@ -124,7 +152,7 @@ export default function App() {
       const formatted: Holding[] = data.map((item) => ({
         id: item.id,
         ticker: item.ticker,
-        name: companyNames[item.ticker] || item.ticker,
+        name: item.name || companyNames[item.ticker] || item.ticker,
         shares: Number(item.shares),
         buyPrice: Number(item.buy_price),
         currentPrice: Number(item.current_price),
@@ -145,13 +173,89 @@ export default function App() {
       const eurData = await eurRes.json();
       if (eurData?.rates?.[0]?.mid) setEurPln(eurData.rates[0].mid);
     } catch (error) {
-      console.error('Błąd pobierania kursów walut NBP:', error);
+      console.error('Błąd NBP:', error);
     }
   };
 
   useEffect(() => {
     fetchExchangeRates();
   }, []);
+
+  // WYSZUKIWANIE DANYCH WALUTOWYCH Z NBP DO WYKRESU
+  useEffect(() => {
+    if (!currencyModal.open) return;
+
+    const fetchCurrencyHistory = async () => {
+      setCurrencyHistoryLoading(true);
+      let count = 30;
+      if (currencyModal.range === '3M') count = 90;
+      if (currencyModal.range === '1R') count = 255;
+
+      try {
+        const response = await fetch(
+          `https://api.nbp.pl/api/exchangerates/rates/a/${currencyModal.code.toLowerCase()}/last/${count}/?format=json`
+        );
+        const data = await response.json();
+        const points: CurrencyHistoryPoint[] = (data?.rates || []).map((r: any) => ({
+          date: r.effectiveDate.slice(5),
+          rate: r.mid,
+        }));
+        setCurrencyHistory(points);
+      } catch (err) {
+        console.error('Błąd historii NBP:', err);
+      }
+      setCurrencyHistoryLoading(false);
+    };
+
+    fetchCurrencyHistory();
+  }, [currencyModal.open, currencyModal.code, currencyModal.range]);
+
+  // LOGIKA AUTOCOMPLETE DLA TICKERÓW
+  const handleTickerChange = (value: string) => {
+    setTicker(value);
+    setSelectedName('');
+
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+
+    if (value.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setSearchLoading(true);
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `https://corsproxy.io/?${encodeURIComponent(
+            `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(value)}&quotesCount=6`
+          )}`
+        );
+        const data = await response.json();
+        const quotes: TickerSuggestion[] = (data?.quotes || []).map((q: any) => ({
+          symbol: q.symbol,
+          name: q.shortname || q.longname || q.symbol,
+          exchDisp: q.exchDisp || q.exchange,
+          typeDisp: q.typeDisp,
+        }));
+        setSuggestions(quotes);
+        setShowSuggestions(quotes.length > 0);
+      } catch {
+        setSuggestions([]);
+      }
+      setSearchLoading(false);
+    }, 300);
+  };
+
+  const selectSuggestion = (s: TickerSuggestion) => {
+    setTicker(s.symbol);
+    setSelectedName(s.name);
+    setShowSuggestions(false);
+
+    if (s.symbol.endsWith('.WA')) setCurrency('PLN');
+    else if (s.symbol.endsWith('.DE') || s.symbol.endsWith('.PA') || s.symbol.endsWith('.AS')) setCurrency('EUR');
+    else setCurrency('USD');
+  };
 
   const fetchStockData = async (symbol: string) => {
     try {
@@ -172,13 +276,15 @@ export default function App() {
       let detectedCurrency = meta?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
       if (detectedCurrency === 'GBp') detectedCurrency = 'GBP';
 
-      if (fetchedName && fetchedName !== cleanSymbol) {
-        setCompanyNames(prev => ({ ...prev, [cleanSymbol]: fetchedName }));
+      const finalName = selectedName || fetchedName;
+
+      if (finalName && finalName !== cleanSymbol) {
+        setCompanyNames(prev => ({ ...prev, [cleanSymbol]: finalName }));
       }
 
-      return { price: price ? parseFloat(price) : null, name: fetchedName, currency: detectedCurrency };
+      return { price: price ? parseFloat(price) : null, name: finalName, currency: detectedCurrency };
     } catch (error) {
-      return { price: null, name: symbol, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
+      return { price: null, name: selectedName || symbol, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
     }
   };
 
@@ -227,11 +333,12 @@ export default function App() {
     const newId = Date.now().toString();
 
     const selectedCurrency = currency || stockData.currency;
+    const finalName = selectedName || stockData.name || cleanTicker;
 
     const newHoldingObj: Holding = {
       id: newId,
       ticker: cleanTicker,
-      name: stockData.name,
+      name: finalName,
       shares: numShares,
       buyPrice: numPrice,
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
@@ -243,6 +350,7 @@ export default function App() {
         id: newId,
         user_id: user.id,
         ticker: cleanTicker,
+        name: finalName,
         shares: numShares,
         buy_price: numPrice,
         current_price: newHoldingObj.currentPrice,
@@ -256,8 +364,11 @@ export default function App() {
     }
 
     setTicker('');
+    setSelectedName('');
     setShares('');
     setBuyPrice('');
+    setSuggestions([]);
+    setShowSuggestions(false);
     setLoading(false);
   };
 
@@ -357,6 +468,7 @@ export default function App() {
               id,
               user_id: user.id,
               ticker: symbol,
+              name: stockData.name,
               shares: parseFloat(data.totalShares.toFixed(4)),
               buy_price: parseFloat(avgBuyPrice.toFixed(2)),
               current_price: parseFloat(data.latestCurrentPrice.toFixed(2)),
@@ -411,14 +523,13 @@ export default function App() {
         if (user) {
           await supabase
             .from('holdings')
-            .update({ current_price: newPrice, currency: stockData.currency })
+            .update({ current_price: newPrice, currency: stockData.currency, name: item.name })
             .eq('id', item.id)
             .eq('user_id', user.id);
         }
 
         return {
           ...item,
-          name: stockData.name || item.name,
           currentPrice: newPrice,
           currency: stockData.currency,
         };
@@ -451,7 +562,6 @@ export default function App() {
     };
   }).sort((a, b) => b.value - a.value);
 
-  // OBSŁUGA SORTOWANIA TABELI
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -602,8 +712,23 @@ export default function App() {
               <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', letterSpacing: '-0.5px', color: '#fff' }}>Kashor</h1>
               <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <span>Status: <strong style={{ color: user ? '#22c55e' : '#eab308' }}>{user ? `Zalogowany (${user.email})` : 'Tryb Lokalny (Gość)'}</strong></span>
-                <span>USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln ? `${usdPln.toFixed(4)} zł` : '...'}</strong></span>
-                <span>EUR/PLN: <strong style={{ color: '#a855f7' }}>{eurPln ? `${eurPln.toFixed(4)} zł` : '...'}</strong></span>
+                
+                {/* INTERAKTYWNE KURSY WALUT (KLIKALNE) */}
+                <span
+                  onClick={() => setCurrencyModal({ open: true, code: 'USD', range: '1M' })}
+                  style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                  title="Kliknij, aby zobaczyć wykres USD/PLN"
+                >
+                  USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln ? `${usdPln.toFixed(4)} zł` : '...'}</strong>
+                </span>
+
+                <span
+                  onClick={() => setCurrencyModal({ open: true, code: 'EUR', range: '1M' })}
+                  style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                  title="Kliknij, aby zobaczyć wykres EUR/PLN"
+                >
+                  EUR/PLN: <strong style={{ color: '#a855f7' }}>{eurPln ? `${eurPln.toFixed(4)} zł` : '...'}</strong>
+                </span>
               </p>
             </div>
           </div>
@@ -772,15 +897,50 @@ export default function App() {
           </div>
         )}
 
-        {/* FORMULARZ DODAWANIA AKCJI Z ZMIANĄ WALUTY */}
-        <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center' }}>
-          <input
-            type="text"
-            placeholder="Ticker (np. PKO.WA, AAPL)"
-            value={ticker}
-            onChange={(e) => setTicker(e.target.value)}
-            style={{ flex: 2, minWidth: '150px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
-          />
+        {/* FORMULARZ DODAWANIA AKCJI Z DYNAMICZNYM AUTOCOMPLETE */}
+        <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
+          
+          <div style={{ flex: 2, minWidth: '180px', position: 'relative' }}>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                placeholder="Wpisz ticker lub nazwę (np. NVDA, PKO)"
+                value={ticker}
+                onChange={(e) => handleTickerChange(e.target.value)}
+                onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
+                style={{ width: '100%', padding: '10px 36px 10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px', boxSizing: 'border-box' }}
+              />
+              <Search size={16} style={{ position: 'absolute', right: '12px', top: '12px', color: '#64748b' }} />
+            </div>
+
+            {/* ROZWIJANA LISTA PODPOWIEDZI */}
+            {showSuggestions && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: '6px', backgroundColor: '#0b0f19', border: '1px solid #334155', borderRadius: '8px', zIndex: 100, maxHeight: '220px', overflowY: 'auto', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
+                {searchLoading ? (
+                  <div style={{ padding: '12px', textAlign: 'center', color: '#64748b', fontSize: '13px' }}>Szukanie...</div>
+                ) : (
+                  suggestions.map((s) => (
+                    <div
+                      key={s.symbol}
+                      onClick={() => selectSuggestion(s)}
+                      style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#151d30'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <div>
+                        <div style={{ fontWeight: '700', color: '#38bdf8', fontSize: '13px' }}>{s.symbol}</div>
+                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>{s.name}</div>
+                      </div>
+                      <span style={{ fontSize: '10px', color: '#64748b', backgroundColor: '#1e293b', padding: '2px 6px', borderRadius: '4px' }}>
+                        {s.exchDisp || 'Giełda'}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
           <input
             type="number"
             placeholder="Liczba akcji"
@@ -889,6 +1049,72 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* MODAL HISTORII KURSU WALUTY (NBP) */}
+      {currencyModal.open && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ backgroundColor: '#151d30', border: '1px solid #334155', borderRadius: '16px', maxWidth: '600px', width: '100%', padding: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.7)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <LineChartIcon size={24} color="#38bdf8" />
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>
+                  Kurs {currencyModal.code}/PLN (NBP)
+                </h3>
+              </div>
+              <button
+                onClick={() => setCurrencyModal({ ...currencyModal, open: false })}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* PRZEŁĄCZNIK ZAKRESÓW */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              {(['1M', '3M', '1R'] as const).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setCurrencyModal({ ...currencyModal, range: r })}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid #334155',
+                    backgroundColor: currencyModal.range === r ? '#38bdf8' : '#0b0f19',
+                    color: currencyModal.range === r ? '#0b0f19' : '#94a3b8',
+                    fontWeight: 'bold',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+
+            {/* WYKRES DANYCH Z NBP */}
+            <div style={{ height: '240px', width: '100%' }}>
+              {currencyHistoryLoading ? (
+                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Pobieranie historii kursu z NBP...</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={currencyHistory}>
+                    <defs>
+                      <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.4}/>
+                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="date" stroke="#475569" fontSize={11} />
+                    <YAxis domain={['auto', 'auto']} stroke="#475569" fontSize={11} tickFormatter={(v) => `${v.toFixed(2)} zł`} />
+                    <Tooltip contentStyle={{ backgroundColor: '#0b0f19', borderColor: '#334155', borderRadius: '8px', color: '#fff' }} />
+                    <Area type="monotone" dataKey="rate" name="Kurs (zł)" stroke="#38bdf8" strokeWidth={2} fillOpacity={1} fill="url(#colorRate)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer style={{ textAlign: 'center', padding: '20px 0', color: '#475569', fontSize: '12px', borderTop: '1px solid #1e293b', marginTop: '40px' }}>
         Kashor {APP_VERSION} | Ostatnia kompilacja: {BUILD_TIME}
