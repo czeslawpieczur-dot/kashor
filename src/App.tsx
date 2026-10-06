@@ -13,8 +13,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.0.0';
-const BUILD_TIME = '2026-10-06 18:55';
+const APP_VERSION = 'v2.0.1';
+const BUILD_TIME = '2026-10-06 19:00';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -37,7 +37,6 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isGuest, setIsGuest] = useState<boolean>(() => localStorage.getItem('kashor_is_guest') === 'true');
 
-  const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -83,7 +82,6 @@ export default function App() {
         setIsGuest(false);
         localStorage.removeItem('kashor_is_guest');
       }
-      setAuthLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -95,7 +93,6 @@ export default function App() {
       } else {
         setUser(null);
       }
-      setAuthLoading(false);
     });
 
     return () => subscription.unsubscribe();
@@ -223,8 +220,10 @@ export default function App() {
       currency: currency || stockData.currency,
     };
 
+    setHoldings(prev => [...prev, newHoldingObj]);
+
     if (user) {
-      await supabase.from('holdings').insert([{
+      const { error } = await supabase.from('holdings').insert([{
         id: newId,
         user_id: user.id,
         ticker: cleanTicker,
@@ -235,9 +234,12 @@ export default function App() {
         current_price: newHoldingObj.currentPrice,
         currency: newHoldingObj.currency,
       }]);
-      fetchHoldingsFromSupabase();
-    } else {
-      setHoldings(prev => [...prev, newHoldingObj]);
+
+      if (error) {
+        console.error('Błąd zapisu w Supabase:', error);
+      } else {
+        fetchHoldingsFromSupabase();
+      }
     }
 
     setTicker('');
@@ -464,14 +466,6 @@ export default function App() {
     return sortOrder === 'asc' ? comp : -comp;
   });
 
-  if (authLoading) {
-    return (
-      <div style={{ backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <h2>Ładowanie Kashor...</h2>
-      </div>
-    );
-  }
-
   if (isPasswordResetMode) {
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', boxSizing: 'border-box' }}>
@@ -608,7 +602,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* ODSEPAROWANY WYKRES ALOKACJI */}
+        {/* WYKRES ALOKACJI */}
         <AllocationChart data={rawChartData} colors={CHART_COLORS} />
 
         {/* FORMULARZ Z AUTOCOMPLETE */}
@@ -759,7 +753,7 @@ export default function App() {
 
       </div>
 
-      {/* ODSEPAROWANY MODAL NBP */}
+      {/* MODAL NBP */}
       <CurrencyModal
         open={currencyModal.open}
         code={currencyModal.code}
