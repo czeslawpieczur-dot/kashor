@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, Trash2, Edit2, Check, ArrowUpDown, RefreshCw, Upload, Eraser, LogOut, Search } from 'lucide-react';
+import { Wallet, Trash2, Edit2, Check, ArrowUpDown, Upload, Eraser, LogOut, Search } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
