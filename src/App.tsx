@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, 
   Search, Plus, RefreshCw, Upload, Eraser, LogOut, KeyRound, 
-  TrendingUp, TrendingDown, Calendar 
+  TrendingUp, TrendingDown, Calendar, HelpCircle 
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -13,8 +13,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.1.2';
-const BUILD_TIME = '2026-10-06 19:40';
+const APP_VERSION = 'v2.1.3';
+const BUILD_TIME = '2026-10-06 21:30';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -60,6 +60,7 @@ export default function App() {
   const [currency, setCurrency] = useState('PLN');
   const [purchaseDate, setPurchaseDate] = useState<string>(getTodayString());
   const [loading, setLoading] = useState(false);
+  const [showXtbHelp, setShowXtbHelp] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
@@ -240,8 +241,6 @@ export default function App() {
     const cleanTicker = ticker.trim().toUpperCase();
 
     const stockData = await fetchStockPriceAndName(cleanTicker, selectedName);
-    
-    // Dodatkowa wymuszona filtracja nazwy przy dodawaniu
     const meta = getMetaBySymbol(cleanTicker);
     let resolvedName = stockData.name;
     if (!resolvedName || resolvedName.toUpperCase() === cleanTicker || resolvedName.includes('.WA')) {
@@ -347,7 +346,7 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+ const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -355,56 +354,110 @@ export default function App() {
       header: false,
       skipEmptyLines: true,
       encoding: 'UTF-8',
+      delimitersToGuess: [',', ';', '\t', '|'],
       complete: async (results: Papa.ParseResult<string[]>) => {
         const rows = results.data;
         if (!rows || rows.length === 0) return;
 
         let headerIndex = -1;
         for (let i = 0; i < rows.length; i++) {
-          const rowStr = rows[i].join(',');
-          if (rowStr.includes('Ticker') || rowStr.includes('Instrument')) {
+          const rowStr = rows[i].join(' ').toLowerCase();
+          if (rowStr.includes('ticker') || rowStr.includes('open price') || rowStr.includes('cena otwarcia')) {
             headerIndex = i;
             break;
           }
         }
 
-        if (headerIndex === -1) return;
+        if (headerIndex === -1) {
+          alert('Nie rozpoznałem nagłówków w pliku CSV z XTB.');
+          return;
+        }
 
-        const headers = rows[headerIndex].map((h) => h ? h.replace(/"/g, '').trim() : '');
-        let tickerCol = headers.indexOf('Ticker');
-        if (tickerCol === -1) tickerCol = headers.indexOf('Instrument');
-        const volumeCol = headers.indexOf('Volume');
-        const openPriceCol = headers.indexOf('Open Price');
+        const headers = rows[headerIndex].map((h) => h ? h.replace(/"/g, '').trim().toLowerCase() : '');
+        
+        let tickerCol = headers.indexOf('ticker');
+        if (tickerCol === -1) tickerCol = headers.findIndex(h => h === 'symbol' || h === 'instrument');
+        
+        let volumeCol = headers.findIndex(h => h.includes('volume') || h.includes('wolumen') || h.includes('ilość') || h.includes('ilosc'));
+        let openPriceCol = headers.findIndex(h => h.includes('open price') || h.includes('cena otwarcia'));
+        let dateCol = headers.findIndex(h => h.includes('time') || h.includes('czas'));
 
-        if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) return;
+        if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) {
+          alert('Plik CSV nie zawiera wszystkich wymaganych kolumn (Ticker, Volume, Open Price).');
+          return;
+        }
 
         setLoading(true);
         const importedHoldings: Holding[] = [];
+        
+        // Zmienna pamiętająca ticker dla wierszy z poszczególnymi transzami (gdzie komórka tickera jest pusta)
+        let currentTicker = '';
+        // Pamięć podręczna, żeby nie odpytywać API wiele razy o tę samą spółkę
+        const apiCache: Record<string, any> = {};
 
         for (let i = headerIndex + 1; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || !row[tickerCol]) continue;
+          if (!row) continue;
 
-          let rawTicker = row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase();
+          const rowTickerCell = row[tickerCol] ? row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase() : '';
+          
+          // Jeśli wiersz ma ticker (np. wiersz podsumowujący spółkę), zapamiętujemy go
+          if (rowTickerCell && !rowTickerCell.includes('SUMA') && !rowTickerCell.includes('TOTAL')) {
+            currentTicker = rowTickerCell;
+          }
+
+          // Jeśli nie mamy żadnego tickera w pamięci, omijamy wiersz
+          if (!currentTicker) continue;
+
+          let rawTicker = currentTicker;
           if (rawTicker.endsWith('.PL')) rawTicker = rawTicker.replace('.PL', '.WA');
           else if (rawTicker.endsWith('.US')) rawTicker = rawTicker.replace('.US', '');
 
-          const volume = parseFloat(row[volumeCol].toString().replace(',', '.'));
-          const price = parseFloat(row[openPriceCol].toString().replace(',', '.'));
+          const volumeStr = row[volumeCol] ? row[volumeCol].toString() : '';
+          const priceStr = row[openPriceCol] ? row[openPriceCol].toString() : '';
 
+          const volume = parseFloat(volumeStr.replace(',', '.'));
+          const price = parseFloat(priceStr.replace(',', '.'));
+
+          // Omijamy wiersze podsumowujące (nie mają konkretnej ceny zakupu)
           if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
 
-          const stockData = await fetchStockPriceAndName(rawTicker);
+          let parsedDate = getTodayString();
+          if (dateCol !== -1 && row[dateCol]) {
+            const dateMatch = row[dateCol].toString().match(/\d{4}-\d{2}-\d{2}/);
+            if (dateMatch) {
+              parsedDate = dateMatch[0];
+            }
+          }
+
+          // Pobieranie danych z cache lub z API
+          if (!apiCache[rawTicker]) {
+            const stockData = await fetchStockPriceAndName(rawTicker);
+            const meta = getMetaBySymbol(rawTicker);
+            let resolvedName = stockData.name;
+            if (!resolvedName || resolvedName.toUpperCase() === rawTicker || resolvedName.includes('.WA')) {
+              if (meta?.name) resolvedName = meta.name;
+            }
+            apiCache[rawTicker] = {
+              name: resolvedName || rawTicker,
+              type: stockData.type,
+              price: stockData.price,
+              currency: stockData.currency
+            };
+          }
+
+          const cachedData = apiCache[rawTicker];
+
           importedHoldings.push({
             id: Date.now().toString() + Math.random(),
             ticker: rawTicker,
-            name: stockData.name,
-            type: stockData.type,
+            name: cachedData.name,
+            type: cachedData.type,
             shares: volume,
             buyPrice: price,
-            currentPrice: stockData.price || price,
-            currency: stockData.currency,
-            purchaseDate: getTodayString(),
+            currentPrice: cachedData.price || price,
+            currency: cachedData.currency,
+            purchaseDate: parsedDate,
           });
         }
 
@@ -429,7 +482,7 @@ export default function App() {
         }
 
         setLoading(false);
-        e.target.value = '';
+        e.target.value = ''; // Reset inputa
       }
     });
   };
@@ -608,11 +661,23 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <label style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(34, 197, 94, 0.3)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Upload size={16} /> Importuj z XTB (CSV)
-              <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
-            </label>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(34, 197, 94, 0.3)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Upload size={16} /> Importuj z XTB (CSV)
+                <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
+              </label>
+              
+              <button 
+                type="button"
+                onClick={() => setShowXtbHelp(true)}
+                title="Jak pobrać plik z XTB?"
+                style={{ background: 'none', border: '1px solid #334155', borderRadius: '8px', padding: '9px', color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <HelpCircle size={16} />
+              </button>
+            </div>
 
             <button onClick={refreshPrices} disabled={loading || holdings.length === 0} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#151d30', color: '#38bdf8', fontWeight: '600', fontSize: '13px', cursor: loading || holdings.length === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
@@ -826,6 +891,33 @@ export default function App() {
         onClose={() => setCurrencyModal({ ...currencyModal, open: false })}
         onRangeChange={(range: '1M' | '3M' | '1R') => setCurrencyModal({ ...currencyModal, range })}
       />
+
+      {/* MODAL POMOCY XTB */}
+      {showXtbHelp && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ backgroundColor: '#151d30', border: '1px solid #334155', borderRadius: '16px', padding: '24px', maxWidth: '460px', width: '100%', color: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '18px', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <HelpCircle size={20} /> Jak pobrać CSV z XTB?
+              </h3>
+              <button onClick={() => setShowXtbHelp(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '18px' }}>✕</button>
+            </div>
+            
+            <ol style={{ paddingLeft: '20px', margin: 0, color: '#94a3b8', fontSize: '14px', lineHeight: '1.7' }}>
+              <li>Zaloguj się do **xStation 5** na komputerze.</li>
+              <li>Wybierz **Moje Transakcje** w lewym pionowym menu.</li>
+              <li>W prawym górnym rogu kliknij przycisk **Eksport** i wybierz Excel (XLSX).</li>
+              <li>Otwórz plik na komputerze i przejdź do zakładki **Open Positions** na dole ekranu.</li>
+              <li>Kliknij **Plik &gt; Zapisz jako...** i wybierz format **Tekst CSV (.csv)**.</li>
+              <li>Wgraj ten nowo zapisany plik do aplikacji.</li>
+            </ol>
+
+            <button onClick={() => setShowXtbHelp(false)} style={{ marginTop: '20px', width: '100%', padding: '10px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer' }}>
+              Rozumiem!
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* STOPKA */}
       <footer style={{ textAlign: 'center', padding: '20px 0', color: '#475569', fontSize: '12px', borderTop: '1px solid #1e293b', marginTop: '40px' }}>
