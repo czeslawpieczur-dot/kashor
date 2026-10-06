@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, 
-  Search, Plus, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, 
-  PieChart as PieChartIcon, LineChart as LineChartIcon, 
-  X, KeyRound, TrendingUp, TrendingDown 
+  Search, Plus, RefreshCw, Upload, Eraser, LogOut, KeyRound, 
+  TrendingUp, TrendingDown 
 } from 'lucide-react';
 import Papa from 'papaparse';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import type { Holding, TickerSuggestion, SortField, SortOrder, AssetType, CurrencyHistoryPoint } from './types';
 import { searchGlobalBaza } from './services/knownCompanies';
 import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
+import { AllocationChart } from './components/AllocationChart';
+import { CurrencyModal } from './components/CurrencyModal';
 
 const APP_VERSION = 'v2.0.0';
-const BUILD_TIME = '2026-10-06 18:50';
+const BUILD_TIME = '2026-10-06 18:55';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -608,56 +608,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* WYKRES ALOKACJI PORTFELA */}
-        {holdings.length > 0 && (
-          <div style={{ backgroundColor: '#151d30', padding: '24px', borderRadius: '16px', marginBottom: '28px', border: '1px solid #1e293b' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-              <PieChartIcon size={20} color="#38bdf8" />
-              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: '700' }}>Struktura i Alokacja Portfela</h3>
-            </div>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', alignItems: 'center' }}>
-              <div style={{ height: '260px', width: '100%' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={rawChartData} cx="50%" cy="50%" innerRadius={60} outerRadius={95} paddingAngle={2} dataKey="value">
-                      {rawChartData.map((_entry, index) => (
-                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} stroke="#151d30" strokeWidth={2} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#0b0f19', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc', fontSize: '13px' }}
-                      formatter={(value: any, _name: any, item: any) => [
-                        `${Number(value).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł (${item.payload.percentNum.toFixed(1)}%)`,
-                        item.payload.name
-                      ]}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div style={{ maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {rawChartData.map((item, index) => (
-                    <div key={item.ticker} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#0b0f19', border: '1px solid #1e293b', fontSize: '13px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
-                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: CHART_COLORS[index % CHART_COLORS.length], flexShrink: 0 }} />
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontWeight: '700', color: '#fff', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '170px' }}>{item.name}</span>
-                          <span style={{ fontSize: '11px', color: '#64748b' }}>{item.ticker}</span>
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        <div style={{ fontWeight: '600', color: '#38bdf8' }}>{item.percentNum.toFixed(1)}%</div>
-                        <div style={{ fontSize: '11px', color: '#64748b' }}>{item.value.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* ODSEPAROWANY WYKRES ALOKACJI */}
+        <AllocationChart data={rawChartData} colors={CHART_COLORS} />
 
         {/* FORMULARZ Z AUTOCOMPLETE */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
@@ -807,64 +759,16 @@ export default function App() {
 
       </div>
 
-      {/* MODAL HISTORII KURSU WALUTY (NBP) */}
-      {currencyModal.open && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-          <div style={{ backgroundColor: '#151d30', border: '1px solid #334155', borderRadius: '16px', maxWidth: '600px', width: '100%', padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <LineChartIcon size={24} color="#38bdf8" />
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>Kurs {currencyModal.code}/PLN (NBP)</h3>
-              </div>
-              <button onClick={() => setCurrencyModal({ ...currencyModal, open: false })} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-              {(['1M', '3M', '1R'] as const).map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setCurrencyModal({ ...currencyModal, range: r })}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid #334155',
-                    backgroundColor: currencyModal.range === r ? '#38bdf8' : '#0b0f19',
-                    color: currencyModal.range === r ? '#0b0f19' : '#94a3b8',
-                    fontWeight: 'bold',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-
-            <div style={{ height: '240px', width: '100%' }}>
-              {currencyHistoryLoading ? (
-                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Pobieranie historii kursu z NBP...</div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={currencyHistory}>
-                    <defs>
-                      <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.4}/>
-                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="date" stroke="#475569" fontSize={11} />
-                    <YAxis domain={['auto', 'auto']} stroke="#475569" fontSize={11} tickFormatter={(v) => `${v.toFixed(2)} zł`} />
-                    <Tooltip contentStyle={{ backgroundColor: '#0b0f19', borderColor: '#334155', borderRadius: '8px', color: '#fff' }} />
-                    <Area type="monotone" dataKey="rate" name="Kurs (zł)" stroke="#38bdf8" strokeWidth={2} fillOpacity={1} fill="url(#colorRate)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ODSEPAROWANY MODAL NBP */}
+      <CurrencyModal
+        open={currencyModal.open}
+        code={currencyModal.code}
+        range={currencyModal.range}
+        history={currencyHistory}
+        loading={currencyHistoryLoading}
+        onClose={() => setCurrencyModal({ ...currencyModal, open: false })}
+        onRangeChange={(range) => setCurrencyModal({ ...currencyModal, range })}
+      />
 
       {/* STOPKA */}
       <footer style={{ textAlign: 'center', padding: '20px 0', color: '#475569', fontSize: '12px', borderTop: '1px solid #1e293b', marginTop: '40px' }}>
