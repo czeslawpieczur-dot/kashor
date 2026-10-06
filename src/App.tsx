@@ -5,13 +5,13 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recha
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-// WERSJONOWANIE APLIKACJI
-const APP_VERSION = 'v1.2.0';
-const BUILD_TIME = '2026-10-06 14:59';
+const APP_VERSION = 'v1.2.1';
+const BUILD_TIME = '2026-10-06 15:10';
 
 interface Holding {
   id: string;
   ticker: string;
+  name?: string;
   shares: number;
   buyPrice: number;
   currentPrice: number;
@@ -20,7 +20,8 @@ interface Holding {
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
-  '#ec4899', '#06b6d4', '#10b981', '#f43f5e', '#6366f1'
+  '#ec4899', '#06b6d4', '#10b981', '#f43f5e', '#6366f1',
+  '#8b5cf6', '#d946ef', '#64748b'
 ];
 
 export default function App() {
@@ -101,6 +102,7 @@ export default function App() {
       const formatted: Holding[] = data.map((item) => ({
         id: item.id,
         ticker: item.ticker,
+        name: item.name || item.ticker,
         shares: Number(item.shares),
         buyPrice: Number(item.buy_price),
         currentPrice: Number(item.current_price),
@@ -134,19 +136,20 @@ export default function App() {
           `https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}`
         )}`
       );
-      if (!response.ok) return { price: null, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
+      if (!response.ok) return { price: null, name: cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
       const data = await response.json();
       const result = data?.chart?.result?.[0];
       const price = result?.meta?.regularMarketPrice;
+      const name = result?.meta?.shortName || result?.meta?.longName || cleanSymbol;
       
       let currency = result?.meta?.currency || 'PLN';
       if (!cleanSymbol.endsWith('.WA') && (currency === 'PLN' || !currency)) {
         currency = 'USD';
       }
 
-      return { price: price ? parseFloat(price) : null, currency };
+      return { price: price ? parseFloat(price) : null, name, currency };
     } catch (error) {
-      return { price: null, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
+      return { price: null, name: symbol, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
     }
   };
 
@@ -197,6 +200,7 @@ export default function App() {
     const newHoldingObj: Holding = {
       id: newId,
       ticker: cleanTicker,
+      name: stockData.name,
       shares: numShares,
       buyPrice: numPrice,
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
@@ -298,16 +302,19 @@ export default function App() {
           }
         }
 
+        setLoading(true);
         const importedHoldings: Holding[] = [];
         const supabaseRows = [];
 
         for (const [symbol, data] of Object.entries(aggregated)) {
           const avgBuyPrice = data.totalCost / data.totalShares;
           const id = Date.now().toString() + Math.random().toString();
+          const stockData = await fetchStockData(symbol);
 
           importedHoldings.push({
             id,
             ticker: symbol,
+            name: stockData.name,
             shares: parseFloat(data.totalShares.toFixed(4)),
             buyPrice: parseFloat(avgBuyPrice.toFixed(2)),
             currentPrice: parseFloat(data.latestCurrentPrice.toFixed(2)),
@@ -328,16 +335,15 @@ export default function App() {
         }
 
         if (user && supabaseRows.length > 0) {
-          setLoading(true);
           await supabase.from('holdings').delete().eq('user_id', user.id);
           const { error } = await supabase.from('holdings').insert(supabaseRows);
           if (error) alert('Błąd zapisu w chmurze: ' + error.message);
           else fetchHoldingsFromSupabase();
-          setLoading(false);
         } else if (importedHoldings.length > 0) {
           setHoldings(importedHoldings);
         }
 
+        setLoading(false);
         e.target.value = '';
       }
     });
@@ -381,6 +387,7 @@ export default function App() {
 
         return {
           ...item,
+          name: stockData.name,
           currentPrice: newPrice,
           currency: stockData.currency,
         };
@@ -401,15 +408,36 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
-  // DANE DLA WYKRESU KOŁOWEGO
-  const chartData = holdings.map((h) => {
+  // PRZYGOTOWANIE DANYCH DLA CZYTELNEGO WYKRESU
+  const rawChartData = holdings.map((h) => {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
     return {
-      name: h.ticker,
+      ticker: h.ticker,
+      name: h.name || h.ticker,
       value: parseFloat(valuePLN.toFixed(2)),
-      percent: totalValuePLN > 0 ? ((valuePLN / totalValuePLN) * 100).toFixed(1) : '0',
+      percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
     };
   }).sort((a, b) => b.value - a.value);
+
+  // GRUPOWANIE MAŁYCH POZYCJI (<1.5% PORTFELA) DLA CZYTELNOŚCI LEGENDY
+  const mainItems = rawChartData.filter(item => item.percentNum >= 1.5);
+  const smallItems = rawChartData.filter(item => item.percentNum < 1.5);
+
+  const chartData = [...mainItems.map(item => ({
+    name: item.name !== item.ticker ? `${item.ticker} - ${item.name}` : item.ticker,
+    value: item.value,
+    percent: item.percentNum.toFixed(1),
+  }))];
+
+  if (smallItems.length > 0) {
+    const otherTotalValue = smallItems.reduce((sum, item) => sum + item.value, 0);
+    const otherPercent = totalValuePLN > 0 ? (otherTotalValue / totalValuePLN) * 100 : 0;
+    chartData.push({
+      name: `Pozostałe (${smallItems.length} spółek)`,
+      value: parseFloat(otherTotalValue.toFixed(2)),
+      percent: otherPercent.toFixed(1),
+    });
+  }
 
   if (authLoading) {
     return (
@@ -575,7 +603,7 @@ export default function App() {
               }}
             >
               <RefreshCw size={18} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-              {loading ? 'Odświeżanie...' : 'Odśwież kursy'}
+              {loading ? 'Odświeżanie...' : 'Odśwież kursy & nazwy'}
             </button>
 
             <button
@@ -646,16 +674,16 @@ export default function App() {
               <h3 style={{ margin: 0, fontSize: '18px' }}>Struktura i Alokacja Portfela</h3>
             </div>
             
-            <div style={{ height: '320px', width: '100%' }}>
+            <div style={{ height: '360px', width: '100%' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={chartData}
                     cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={3}
+                    cy="45%"
+                    innerRadius={65}
+                    outerRadius={105}
+                    paddingAngle={2}
                     dataKey="value"
                   >
                     {chartData.map((_entry, index) => (
@@ -669,17 +697,18 @@ export default function App() {
                       name
                     ]}
                   />
-                  <Legend verticalAlign="bottom" height={36} wrapperStyle={{ color: '#94a3b8', fontSize: '13px' }} />
+                  <Legend verticalAlign="bottom" height={48} wrapperStyle={{ color: '#94a3b8', fontSize: '12px', paddingTop: '10px' }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
           </div>
         )}
 
+        {/* FORMULARZ DODAWANIA AKCJI */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', marginBottom: '30px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #334155' }}>
           <input
             type="text"
-            placeholder="Ticker (np. PKO.WA, AAPL, NVDA)"
+            placeholder="Ticker (np. PKO.WA, AAPL)"
             value={ticker}
             onChange={(e) => setTicker(e.target.value)}
             style={{ flex: 1, minWidth: '150px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
@@ -694,7 +723,7 @@ export default function App() {
           <input
             type="number"
             step="0.01"
-            placeholder="Cena zakupu (w walucie akcji)"
+            placeholder="Cena zakupu"
             value={buyPrice}
             onChange={(e) => setBuyPrice(e.target.value)}
             style={{ flex: 1, minWidth: '150px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
@@ -704,6 +733,7 @@ export default function App() {
           </button>
         </form>
 
+        {/* TABELA POSIADANYCH AKCJI */}
         <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', overflow: 'hidden', border: '1px solid #334155' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
@@ -712,8 +742,8 @@ export default function App() {
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
-                <tr style={{ backgroundColor: '#334155', color: '#94a3b8', fontSize: '14px' }}>
-                  <th style={{ padding: '14px' }}>Symbol</th>
+                <tr style={{ backgroundColor: '#334155', color: '#94a3b8', fontSize: '13px' }}>
+                  <th style={{ padding: '14px' }}>Symbol / Spółka</th>
                   <th style={{ padding: '14px' }}>Ilość</th>
                   <th style={{ padding: '14px' }}>Śr. cena zakupu</th>
                   <th style={{ padding: '14px' }}>Aktualny kurs</th>
@@ -733,8 +763,9 @@ export default function App() {
 
                   return (
                     <tr key={h.id} style={{ borderBottom: '1px solid #334155' }}>
-                      <td style={{ padding: '14px', fontWeight: 'bold' }}>
-                        {h.ticker} <span style={{ fontSize: '11px', color: '#94a3b8' }}>({h.currency})</span>
+                      <td style={{ padding: '14px' }}>
+                        <div style={{ fontWeight: 'bold', color: '#f8fafc' }}>{h.ticker}</div>
+                        <div style={{ fontSize: '12px', color: '#94a3b8' }}>{h.name || h.ticker}</div>
                       </td>
                       <td style={{ padding: '14px' }}>{h.shares}</td>
                       <td style={{ padding: '14px' }}>{h.buyPrice.toFixed(2)} {currencySymbol}</td>
