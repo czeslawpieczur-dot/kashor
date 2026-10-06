@@ -5,27 +5,22 @@ export const fetchStockPriceAndName = async (ticker: string, fallbackName?: stri
   
   try {
     const cleanTicker = ticker.trim().toUpperCase();
-    
-    // Niezawodne proxy AllOrigins omijające błędy CORS bez konfiguracji serwera
-    const targetUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${cleanTicker}`;
-    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+    const url = `/api/quote?symbol=${cleanTicker}`;
     
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
-      const quote = data?.quoteResponse?.result?.[0];
-      
-      if (quote) {
+      if (data && data.price !== null) {
         return {
-          price: quote.regularMarketPrice || null,
-          name: quote.longName || quote.shortName || fallbackName || cleanTicker,
-          currency: quote.currency || 'PLN',
-          type: (quote.quoteType === 'ETF' ? 'etf' : 'stock') as AssetType,
+          price: data.price,
+          name: data.name || fallbackName || cleanTicker,
+          currency: data.currency || 'PLN',
+          type: (data.type === 'etf' ? 'etf' : 'stock') as AssetType,
         };
       }
     }
   } catch (err) {
-    console.error('Błąd pobierania z Yahoo API:', err);
+    console.error('Błąd pobierania z Vercel API:', err);
   }
   
   return { price: null, name: fallbackName || ticker, currency: 'PLN', type: 'stock' };
