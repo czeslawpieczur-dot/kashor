@@ -8,13 +8,13 @@ import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import type { Holding, TickerSuggestion, SortField, SortOrder, AssetType, CurrencyHistoryPoint } from './types';
-import { searchGlobalBaza } from './services/knownCompanies';
+import { searchGlobalBaza, getMetaBySymbol } from './services/knownCompanies';
 import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.1.0';
-const BUILD_TIME = '2026-10-06 19:25';
+const APP_VERSION = 'v2.1.2';
+const BUILD_TIME = '2026-10-06 19:40';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -117,7 +117,24 @@ export default function App() {
     } else if (isGuest) {
       const saved = localStorage.getItem('kashor_holdings');
       if (saved) {
-        try { setHoldings(JSON.parse(saved)); } catch (e) { console.error(e); }
+        try { 
+          const parsed = JSON.parse(saved);
+          const formatted = parsed.map((item: any) => {
+            const cleanTicker = (item.ticker || '').trim().toUpperCase();
+            const meta = getMetaBySymbol(cleanTicker);
+            let finalName = item.name;
+            
+            if (!finalName || finalName.toUpperCase() === cleanTicker || finalName.toUpperCase() === cleanTicker + '.WA' || finalName.includes('.WA')) {
+              if (meta?.name) finalName = meta.name;
+            }
+            return {
+              ...item,
+              name: finalName || cleanTicker,
+              purchaseDate: item.purchaseDate || getTodayString()
+            };
+          });
+          setHoldings(formatted); 
+        } catch (e) { console.error(e); }
       }
     } else {
       setHoldings([]);
@@ -163,17 +180,29 @@ export default function App() {
     setLoading(true);
     const { data } = await supabase.from('holdings').select('*').eq('user_id', user.id);
     if (data) {
-      const formatted: Holding[] = data.map(item => ({
-        id: item.id,
-        ticker: item.ticker,
-        name: item.name || item.ticker,
-        type: item.type || 'stock',
-        shares: Number(item.shares),
-        buyPrice: Number(item.buy_price),
-        currentPrice: Number(item.current_price),
-        currency: item.currency || 'PLN',
-        purchaseDate: item.purchase_date || getTodayString(),
-      }));
+      const formatted: Holding[] = data.map(item => {
+        const cleanTicker = (item.ticker || '').trim().toUpperCase();
+        const meta = getMetaBySymbol(cleanTicker);
+        
+        let finalName = item.name;
+        if (!finalName || finalName.toUpperCase() === cleanTicker || finalName.toUpperCase() === cleanTicker + '.WA' || finalName.includes('.WA')) {
+          if (meta?.name) {
+            finalName = meta.name;
+          }
+        }
+
+        return {
+          id: item.id,
+          ticker: cleanTicker,
+          name: finalName || cleanTicker,
+          type: item.type || meta?.type || 'stock',
+          shares: Number(item.shares),
+          buyPrice: Number(item.buy_price),
+          currentPrice: Number(item.current_price),
+          currency: item.currency || meta?.currency || 'PLN',
+          purchaseDate: item.purchase_date || getTodayString(),
+        };
+      });
       setHoldings(formatted);
     }
     setLoading(false);
@@ -211,12 +240,20 @@ export default function App() {
     const cleanTicker = ticker.trim().toUpperCase();
 
     const stockData = await fetchStockPriceAndName(cleanTicker, selectedName);
+    
+    // Dodatkowa wymuszona filtracja nazwy przy dodawaniu
+    const meta = getMetaBySymbol(cleanTicker);
+    let resolvedName = stockData.name;
+    if (!resolvedName || resolvedName.toUpperCase() === cleanTicker || resolvedName.includes('.WA')) {
+      if (meta?.name) resolvedName = meta.name;
+    }
+
     const newId = Date.now().toString();
 
     const newHoldingObj: Holding = {
       id: newId,
       ticker: cleanTicker,
-      name: stockData.name,
+      name: resolvedName || cleanTicker,
       type: assetType,
       shares: numShares,
       buyPrice: numPrice,
@@ -232,7 +269,7 @@ export default function App() {
         id: newId,
         user_id: user.id,
         ticker: cleanTicker,
-        name: stockData.name,
+        name: newHoldingObj.name,
         type: assetType,
         shares: numShares,
         buy_price: numPrice,
