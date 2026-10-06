@@ -26,7 +26,8 @@ export const GLOBAL_DATABASE: AssetMeta[] = [
   { symbol: 'ATR.WA', name: 'Atrem S.A.', type: 'stock', currency: 'PLN' },
   { symbol: 'WTC.WA', name: 'Wirtualna Polska Holding', type: 'stock', currency: 'PLN' },
   { symbol: 'DOM.WA', name: 'Dom Development S.A.', type: 'stock', currency: 'PLN' },
-  { symbol: 'S2B.WA', name: 'Software Incentive Group', type: 'stock', currency: 'PLN' },
+  { symbol: 'S2B.WA', name: 'Syn2bio', type: 'stock', currency: 'PLN' },
+  { symbol: 'ASB.WA', name: 'Asbis', type: 'stock', currency: 'PLN' },
   { symbol: 'ABE.WA', name: 'AB S.A.', type: 'stock', currency: 'PLN' },
   { symbol: 'TPE.WA', name: 'Tauron Polska Energia', type: 'stock', currency: 'PLN' },
   { symbol: 'ALR.WA', name: 'Alior Bank S.A.', type: 'stock', currency: 'PLN' },
@@ -81,7 +82,6 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
     exchDisp: item.symbol.endsWith('.WA') ? 'GPW' : item.type.toUpperCase(),
   }));
 
-  // Wyszukiwanie sieciowe przez darmowe proxy AllOrigins
   try {
     const targetUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${cleanQuery}&quotesCount=10&newsCount=0`;
     const searchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;

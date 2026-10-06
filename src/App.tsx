@@ -14,8 +14,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.3.3';
-const BUILD_TIME = '2026-10-06 23:58';
+const APP_VERSION = 'v2.3.4';
+const BUILD_TIME = '2026-10-06 23:59';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -25,7 +25,6 @@ const CHART_COLORS = [
 
 const getTodayString = () => new Date().toISOString().split('T')[0];
 
-/** Normalizacja tickerów z XTB / ręcznych (.PL → .WA, .US → bez suffixu) */
 const normalizeTicker = (t: string): string => {
   let s = t.trim().toUpperCase();
   if (s.endsWith('.PL')) s = s.replace(/\.PL$/, '.WA');
@@ -142,7 +141,6 @@ export default function App() {
             }
             return {
               ...item,
-              ticker: cleanTicker,
               name: finalName || cleanTicker,
               purchaseDate: item.purchaseDate || getTodayString()
             };
@@ -299,7 +297,6 @@ export default function App() {
     setHoldings(prev => [...prev, newHoldingObj]);
 
     if (user) {
-      // NIE wysyłamy id – baza generuje UUID
       const { error } = await supabase.from('holdings').insert([{
         user_id: user.id,
         ticker: cleanTicker,
@@ -337,57 +334,48 @@ export default function App() {
 
     await refreshExchangeRates();
 
-    const uniqueTickers = Array.from(new Set(holdings.map(h => h.ticker)));
-    const pricesMap: Record<string, any> = {};
+    const updatedHoldings = await Promise.all(
+      holdings.map(async (item) => {
+        const stockData = await fetchStockPriceAndName(item.ticker, item.name);
+        if (stockData.price !== null) successCount++;
 
-    for (const tickerCode of uniqueTickers) {
-      const fallbackName = holdings.find(h => h.ticker === tickerCode)?.name;
-      const stockData = await fetchStockPriceAndName(tickerCode, fallbackName);
-      
-      pricesMap[tickerCode] = stockData;
-      if (stockData.price !== null) successCount++;
-      
-      // małe opóźnienie, żeby nie walić w rate-limit
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
+        const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
 
-    const updatedHoldings = holdings.map((item) => {
-      const stockData = pricesMap[item.ticker];
-      const newPrice = stockData && stockData.price !== null ? stockData.price : item.currentPrice;
+        return {
+          ...item,
+          currentPrice: newPrice,
+          currency: stockData.currency || item.currency,
+          name: stockData.name && stockData.name !== item.ticker ? stockData.name : item.name,
+        };
+      })
+    );
 
-      return {
-        ...item,
-        currentPrice: newPrice,
-        currency: (stockData && stockData.currency) || item.currency,
-        name: (stockData && stockData.name && stockData.name !== item.ticker) ? stockData.name : item.name,
-      };
-    });
+    setHoldings(updatedHoldings);
 
     if (user) {
       await Promise.all(
-        updatedHoldings.map(item =>
+        updatedHoldings.map(h =>
           supabase
             .from('holdings')
-            .update({ 
-              current_price: item.currentPrice, 
-              currency: item.currency,
-              name: item.name 
+            .update({
+              current_price: h.currentPrice,
+              currency: h.currency,
+              name: h.name,
             })
-            .eq('id', item.id)
+            .eq('id', h.id)
             .eq('user_id', user.id)
         )
       );
     }
 
-    setHoldings(updatedHoldings);
     setLoading(false);
-    
+
     if (successCount === 0) {
       alert('Nie udało się pobrać aktualnych kursów z serwerów giełdowych. Spróbuj ponownie za chwilę.');
-    } else if (successCount < uniqueTickers.length) {
-      alert(`Zaktualizowano częściowo: ${successCount} z ${uniqueTickers.length} spółek.`);
+    } else if (successCount < holdings.length) {
+      alert(`Zaktualizowano częściowo: ${successCount} z ${holdings.length} pozycji.`);
     } else {
-      alert(`Pomyślnie zaktualizowano kursy z giełdy! (${successCount} unikalnych spółek)`);
+      alert(`Pomyślnie zaktualizowano kursy z giełdy! (${successCount} pozycji)`);
     }
   };
 
@@ -428,12 +416,6 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const shouldClear = window.confirm(
-      'Czy chcesz WYCZYŚCIĆ obecny portfel przed importem?\n\n' +
-      '[OK] = Skasuj wszystko i wgraj tylko plik\n' +
-      '[Anuluj] = DOPISZ nowe pozycje do istniejącego portfela'
-    );
 
     setLoading(true);
 
@@ -501,7 +483,7 @@ export default function App() {
           if (!dateMatch) continue;
           const parsedDate = dateMatch[0];
 
-          const rawTicker = normalizeTicker(currentTicker);
+          let rawTicker = normalizeTicker(currentTicker);
 
           const volumeStr = row[volumeCol] ? row[volumeCol].toString() : '';
           const priceStr = row[openPriceCol] ? row[openPriceCol].toString() : '';
@@ -513,7 +495,7 @@ export default function App() {
 
           let inferredCurrency = 'PLN';
           if (rawTicker.endsWith('.DE')) inferredCurrency = 'EUR';
-          if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.L') || !rawTicker.includes('.')) inferredCurrency = 'USD';
+          if (rawTicker.endsWith('.UK') || rawTicker.endsWith('.US') || !rawTicker.includes('.')) inferredCurrency = 'USD';
 
           if (!apiCache[rawTicker]) {
             try {
@@ -529,7 +511,7 @@ export default function App() {
                 price: stockData.price !== null ? stockData.price : price,
                 currency: stockData.currency !== 'PLN' ? stockData.currency : inferredCurrency
               };
-              await new Promise(resolve => setTimeout(resolve, 200));
+              await new Promise(resolve => setTimeout(resolve, 250));
             } catch (err) {
               const meta = getMetaBySymbol(rawTicker);
               apiCache[rawTicker] = {
@@ -565,11 +547,16 @@ export default function App() {
         }
 
         if (user) {
-          if (shouldClear) {
+          const overwrite = window.confirm(
+            `Znaleziono ${importedHoldings.length} transakcji z XTB.\n\n` +
+            `OK = nadpisz cały istniejący portfel\n` +
+            `Anuluj = dodaj do istniejących pozycji`
+          );
+
+          if (overwrite) {
             await supabase.from('holdings').delete().eq('user_id', user.id);
           }
           
-          // NIE wysyłamy id – baza generuje UUID
           const supabaseRows = importedHoldings.map(h => ({
             user_id: user.id,
             ticker: h.ticker,
@@ -594,11 +581,7 @@ export default function App() {
           
           await fetchHoldingsFromSupabase();
         } else {
-          if (shouldClear) {
-            setHoldings(importedHoldings);
-          } else {
-            setHoldings(prev => [...prev, ...importedHoldings]);
-          }
+          setHoldings(importedHoldings);
         }
 
         alert(`Sukces! Zaimportowano ${importedHoldings.length} pojedynczych transakcji z XTB.`);
@@ -922,8 +905,8 @@ export default function App() {
             )}
           </div>
 
-          <input type="number" placeholder="Liczba" value={shares} onChange={(e) => setShares(e.target.value)} style={{ flex: 1, minWidth: '90px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
-          <input type="number" step="0.01" placeholder="Cena zakupu" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} style={{ flex: 1, minWidth: '110px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+          <input type="text" placeholder="Liczba" value={shares} onChange={(e) => setShares(e.target.value)} style={{ flex: 1, minWidth: '90px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+          <input type="text" placeholder="Cena zakupu" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} style={{ flex: 1, minWidth: '110px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
           
           <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#38bdf8', fontWeight: 'bold' }}>
             <option value="PLN">PLN</option>

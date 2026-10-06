@@ -6,7 +6,7 @@ export const fetchStockPriceAndName = async (ticker: string, fallbackName?: stri
   try {
     const cleanTicker = ticker.trim().toUpperCase();
 
-    // v8/chart działa, v7/quote zwraca 401
+    // v8/chart jest znacznie bardziej niezawodne niż v7/quote
     const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${cleanTicker}?interval=1d&range=1d`;
     const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
 
