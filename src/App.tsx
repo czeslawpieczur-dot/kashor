@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, 
   Search, Plus, RefreshCw, Upload, Eraser, LogOut, KeyRound, 
-  TrendingUp, TrendingDown, Calendar, HelpCircle 
+  TrendingUp, TrendingDown, Calendar, HelpCircle,
+  ChevronRight, ChevronDown, CornerDownRight
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -13,8 +14,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.1.4';
-const BUILD_TIME = '2026-10-06 21:50';
+const APP_VERSION = 'v2.2.2';
+const BUILD_TIME = '2026-10-06 22:50';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -64,6 +65,7 @@ export default function App() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   const [suggestions, setSuggestions] = useState<TickerSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -179,7 +181,10 @@ export default function App() {
   const fetchHoldingsFromSupabase = async () => {
     if (!user) return;
     setLoading(true);
-    const { data } = await supabase.from('holdings').select('*').eq('user_id', user.id);
+    const { data, error } = await supabase.from('holdings').select('*').eq('user_id', user.id);
+    if (error) {
+      console.error('Błąd pobierania danych:', error);
+    }
     if (data) {
       const formatted: Holding[] = data.map(item => {
         const cleanTicker = (item.ticker || '').trim().toUpperCase();
@@ -193,7 +198,7 @@ export default function App() {
         }
 
         return {
-          id: item.id,
+          id: item.id.toString(), // konwersja do stringa dla UI
           ticker: cleanTicker,
           name: finalName || cleanTicker,
           type: item.type || meta?.type || 'stock',
@@ -247,7 +252,8 @@ export default function App() {
       if (meta?.name) resolvedName = meta.name;
     }
 
-    const newId = Date.now().toString() + Math.floor(Math.random() * 1000).toString();
+    // Bezpieczny numeryczny ID (Działa z bazą PostgreSQL)
+    const newId = (Date.now() + Math.floor(Math.random() * 100000)).toString();
 
     const newHoldingObj: Holding = {
       id: newId,
@@ -261,6 +267,7 @@ export default function App() {
       purchaseDate: purchaseDate || getTodayString(),
     };
 
+    // Optimistic UI
     setHoldings(prev => [...prev, newHoldingObj]);
 
     if (user) {
@@ -279,8 +286,9 @@ export default function App() {
 
       if (error) {
         console.error('Błąd zapisu w Supabase:', error);
+        alert(`Błąd dodawania: ${error.message}`);
       } else {
-        fetchHoldingsFromSupabase();
+        await fetchHoldingsFromSupabase();
       }
     }
 
@@ -323,11 +331,11 @@ export default function App() {
     setLoading(false);
   };
 
-  const saveCustomName = async (id: string, newName: string) => {
+  const saveCustomNameForTicker = async (tickerGroup: string, newName: string) => {
     if (!newName.trim()) return;
-    setHoldings(prev => prev.map(h => h.id === id ? { ...h, name: newName } : h));
+    setHoldings(prev => prev.map(h => h.ticker === tickerGroup ? { ...h, name: newName } : h));
     if (user) {
-      await supabase.from('holdings').update({ name: newName }).eq('id', id).eq('user_id', user.id);
+      await supabase.from('holdings').update({ name: newName }).eq('ticker', tickerGroup).eq('user_id', user.id);
     }
     setEditingId(null);
   };
@@ -335,6 +343,17 @@ export default function App() {
   const removeHolding = async (id: string) => {
     if (user) await supabase.from('holdings').delete().eq('id', id).eq('user_id', user.id);
     setHoldings(prev => prev.filter(h => h.id !== id));
+  };
+
+  const removeAllLots = async (tickerToDelete: string) => {
+    if (window.confirm(`Czy na pewno chcesz usunąć WSZYSTKIE transakcje dla spółki ${tickerToDelete}?`)) {
+      const lotsToRemove = holdings.filter(h => h.ticker === tickerToDelete);
+      if (user) {
+        const ids = lotsToRemove.map(h => h.id);
+        await supabase.from('holdings').delete().in('id', ids).eq('user_id', user.id);
+      }
+      setHoldings(prev => prev.filter(h => h.ticker !== tickerToDelete));
+    }
   };
 
   const clearAllHoldings = async () => {
@@ -349,7 +368,6 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setLoading(true);
 
     Papa.parse(file, {
@@ -362,6 +380,7 @@ export default function App() {
         if (!rows || rows.length === 0) {
           alert('Plik jest pusty lub uszkodzony.');
           setLoading(false);
+          e.target.value = '';
           return;
         }
 
@@ -377,6 +396,7 @@ export default function App() {
         if (headerIndex === -1) {
           alert('Nie rozpoznałem nagłówków w pliku CSV z XTB. Upewnij się, że eksportujesz zakładkę Open Positions.');
           setLoading(false);
+          e.target.value = '';
           return;
         }
 
@@ -384,7 +404,6 @@ export default function App() {
         
         let tickerCol = headers.indexOf('ticker');
         if (tickerCol === -1) tickerCol = headers.findIndex(h => h === 'symbol' || h === 'instrument' || h.includes('instrument'));
-        
         let volumeCol = headers.findIndex(h => h.includes('volume') || h.includes('wolumen') || h.includes('ilość') || h.includes('ilosc'));
         let openPriceCol = headers.findIndex(h => h.includes('open price') || h.includes('cena otwarcia'));
         let dateCol = headers.findIndex(h => h.includes('time') || h.includes('czas'));
@@ -392,6 +411,7 @@ export default function App() {
         if (tickerCol === -1 || volumeCol === -1 || openPriceCol === -1) {
           alert('Plik CSV nie zawiera wszystkich wymaganych kolumn (Ticker, Volume, Open Price).');
           setLoading(false);
+          e.target.value = '';
           return;
         }
 
@@ -403,18 +423,14 @@ export default function App() {
           const row = rows[i];
           if (!row) continue;
 
-          // Obsługa "zlepionych" tickerów z Excela
           const cellTicker = row[tickerCol] ? row[tickerCol].toString().replace(/"/g, '').trim().toUpperCase() : '';
           if (cellTicker && !cellTicker.includes('SUMA') && !cellTicker.includes('TOTAL') && !cellTicker.includes('IKZE')) {
             currentTicker = cellTicker;
           }
           if (!currentTicker) continue;
 
-          // KLUCZOWY FIX: Weryfikujemy format daty. Wiersze podsumowujące (np. SUMY) nie mają pełnej daty transakcji!
           const dateStr = dateCol !== -1 && row[dateCol] ? row[dateCol].toString() : '';
           const dateMatch = dateStr.match(/\d{4}-\d{2}-\d{2}/);
-          
-          // Jeśli wiersz nie ma daty, pomijamy go z automatu - to musi być ogólne podsumowanie, a nie nasza transakcja
           if (!dateMatch) continue;
           const parsedDate = dateMatch[0];
 
@@ -430,7 +446,6 @@ export default function App() {
 
           if (isNaN(volume) || isNaN(price) || volume <= 0) continue;
 
-          // Cache API (żeby import z XTB był błyskawiczny)
           if (!apiCache[rawTicker]) {
             try {
               const stockData = await fetchStockPriceAndName(rawTicker);
@@ -446,7 +461,6 @@ export default function App() {
                 currency: stockData.currency
               };
             } catch (err) {
-              // W razie awarii API dodajemy wartość domyślną i jedziemy dalej
               const meta = getMetaBySymbol(rawTicker);
               apiCache[rawTicker] = {
                 name: meta?.name || rawTicker,
@@ -458,33 +472,35 @@ export default function App() {
           }
 
           const cachedData = apiCache[rawTicker];
-          const newId = Date.now().toString() + Math.floor(Math.random() * 100000).toString();
+          
+          // BEZPIECZNE NUMERYCZNE ID
+          const newId = (Date.now() + i).toString();
 
           importedHoldings.push({
             id: newId,
             ticker: rawTicker,
-            name: cachedData.name,
-            type: cachedData.type,
+            name: cachedData.name || rawTicker,
+            type: cachedData.type || 'stock',
             shares: volume,
             buyPrice: price,
             currentPrice: cachedData.price || price,
-            currency: cachedData.currency,
+            currency: cachedData.currency || 'PLN',
             purchaseDate: parsedDate,
           });
         }
 
         if (importedHoldings.length === 0) {
-          alert('Plik został załadowany, ale nie znaleziono w nim szczegółowych transakcji (sprawdź format danych).');
+          alert('Plik został załadowany, ale nie znaleziono w nim poprawnych pojedynczych transakcji.');
           setLoading(false);
           e.target.value = '';
           return;
         }
 
-        // Pomyślny import: zapisujemy do bazy danych
         if (user) {
           await supabase.from('holdings').delete().eq('user_id', user.id);
+          
           const supabaseRows = importedHoldings.map(h => ({
-            id: h.id,
+            id: h.id, // Bezpieczny string numeryczny
             user_id: user.id,
             ticker: h.ticker,
             name: h.name,
@@ -495,8 +511,18 @@ export default function App() {
             currency: h.currency,
             purchase_date: h.purchaseDate,
           }));
-          await supabase.from('holdings').insert(supabaseRows);
-          fetchHoldingsFromSupabase();
+
+          const { error } = await supabase.from('holdings').insert(supabaseRows);
+          
+          if (error) {
+            console.error("Szczegóły błędu Supabase:", error);
+            alert(`BŁĄD ZAPISU DO BAZY: ${error.message}`);
+            setLoading(false);
+            e.target.value = '';
+            return;
+          }
+          
+          await fetchHoldingsFromSupabase();
         } else {
           setHoldings(importedHoldings);
         }
@@ -551,6 +577,15 @@ export default function App() {
     return amount;
   };
 
+  const toggleRow = (tickerCode: string) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(tickerCode)) next.delete(tickerCode);
+      else next.add(tickerCode);
+      return next;
+    });
+  };
+
   const totalCostPLN = holdings.reduce((sum, h) => sum + getPLNValue(h.shares * h.buyPrice, h.currency), 0);
   const totalValuePLN = holdings.reduce((sum, h) => sum + getPLNValue(h.shares * h.currentPrice, h.currency), 0);
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
@@ -571,15 +606,46 @@ export default function App() {
     else { setSortField(field); setSortOrder('desc'); }
   };
 
-  const sortedHoldings = [...holdings].sort((a, b) => {
-    const aVal = getPLNValue(a.shares * a.currentPrice, a.currency);
-    const bVal = getPLNValue(b.shares * b.currentPrice, b.currency);
-    const aProf = aVal - getPLNValue(a.shares * a.buyPrice, a.currency);
-    const bProf = bVal - getPLNValue(b.shares * b.buyPrice, b.currency);
+  const groupedHoldingsList = useMemo(() => {
+    const map = new Map();
+    holdings.forEach(h => {
+      if (!map.has(h.ticker)) {
+        map.set(h.ticker, {
+          ticker: h.ticker,
+          name: h.name,
+          type: h.type,
+          currency: h.currency,
+          currentPrice: h.currentPrice,
+          totalShares: 0,
+          totalCostOrig: 0,
+          lots: []
+        });
+      }
+      const group = map.get(h.ticker);
+      group.totalShares += h.shares;
+      group.totalCostOrig += (h.shares * h.buyPrice);
+      group.lots.push(h);
+    });
+
+    return Array.from(map.values()).map(g => ({
+      ...g,
+      avgBuyPrice: g.totalShares > 0 ? g.totalCostOrig / g.totalShares : 0
+    }));
+  }, [holdings]);
+
+  const sortedGroupedHoldings = [...groupedHoldingsList].sort((a, b) => {
+    const aVal = getPLNValue(a.totalShares * a.currentPrice, a.currency);
+    const bVal = getPLNValue(b.totalShares * b.currentPrice, b.currency);
+    
+    const aCostPLN = a.lots.reduce((acc: number, lot: any) => acc + getPLNValue(lot.shares * lot.buyPrice, lot.currency), 0);
+    const bCostPLN = b.lots.reduce((acc: number, lot: any) => acc + getPLNValue(lot.shares * lot.buyPrice, lot.currency), 0);
+    
+    const aProf = aVal - aCostPLN;
+    const bProf = bVal - bCostPLN;
 
     let comp = 0;
     if (sortField === 'ticker') comp = a.name.localeCompare(b.name);
-    else if (sortField === 'shares') comp = a.shares - b.shares;
+    else if (sortField === 'shares') comp = a.totalShares - b.totalShares;
     else if (sortField === 'valuePLN') comp = aVal - bVal;
     else if (sortField === 'profitLossPLN') comp = aProf - bProf;
 
@@ -683,7 +749,6 @@ export default function App() {
           </div>
 
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-            
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <label style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid rgba(34, 197, 94, 0.3)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', fontWeight: '600', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Upload size={16} /> Importuj z XTB (CSV)
@@ -807,7 +872,7 @@ export default function App() {
           </button>
         </form>
 
-        {/* TABELA AKTYWÓW Z DATĄ ZAKUPU */}
+        {/* ZGRUPOWANA TABELA AKTYWÓW */}
         <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
@@ -821,21 +886,21 @@ export default function App() {
                 <th style={{ padding: '14px 18px' }}>Data zakupu</th>
                 <th onClick={() => handleSort('shares')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Liczba
+                    Suma Liczby
                     {sortField === 'shares' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
                   </div>
                 </th>
-                <th style={{ padding: '14px 18px' }}>Cena zakupu</th>
+                <th style={{ padding: '14px 18px' }}>Śr. Cena zakupu</th>
                 <th style={{ padding: '14px 18px' }}>Aktualny kurs</th>
                 <th onClick={() => handleSort('valuePLN')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Wartość (PLN)
+                    Suma Wartość (PLN)
                     {sortField === 'valuePLN' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
                   </div>
                 </th>
                 <th onClick={() => handleSort('profitLossPLN')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Wynik
+                    Suma Wynik
                     {sortField === 'profitLossPLN' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
                   </div>
                 </th>
@@ -843,57 +908,109 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {sortedHoldings.map((h) => {
-                const currencySymbol = h.currency === 'USD' ? '$' : h.currency === 'EUR' ? '€' : 'zł';
-                const valPLN = getPLNValue(h.shares * h.currentPrice, h.currency);
-                const costPLN = getPLNValue(h.shares * h.buyPrice, h.currency);
-                const profitPLN = valPLN - costPLN;
-                const profitPct = costPLN > 0 ? (profitPLN / costPLN) * 100 : 0;
+              {sortedGroupedHoldings.map((group) => {
+                const isExpanded = expandedRows.has(group.ticker);
+                const currencySymbol = group.currency === 'USD' ? '$' : group.currency === 'EUR' ? '€' : 'zł';
+                
+                const groupValPLN = getPLNValue(group.totalShares * group.currentPrice, group.currency);
+                const groupCostPLN = group.lots.reduce((acc: number, lot: any) => acc + getPLNValue(lot.shares * lot.buyPrice, lot.currency), 0);
+                const groupProfitPLN = groupValPLN - groupCostPLN;
+                const groupProfitPct = groupCostPLN > 0 ? (groupProfitPLN / groupCostPLN) * 100 : 0;
 
                 return (
-                  <tr key={h.id} style={{ borderBottom: '1px solid #1e293b' }}>
-                    <td style={{ padding: '14px 18px' }}>
-                      {editingId === h.id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <input
-                            type="text"
-                            value={editingNameValue}
-                            onChange={(e) => setEditingNameValue(e.target.value)}
-                            style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #38bdf8', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px', fontWeight: 'bold' }}
-                          />
-                          <button onClick={() => saveCustomName(h.id, editingNameValue)} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer' }}>
-                            <Check size={18} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div onClick={() => { setEditingId(h.id); setEditingNameValue(h.name); }} style={{ cursor: 'pointer' }}>
-                          <div style={{ fontWeight: '700', color: '#fff', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span>{h.name}</span>
-                            <Edit2 size={12} color="#475569" />
+                  <React.Fragment key={group.ticker}>
+                    <tr style={{ borderBottom: '1px solid #1e293b', backgroundColor: isExpanded ? '#1e293b' : 'transparent', transition: 'background-color 0.2s' }}>
+                      <td style={{ padding: '14px 18px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div onClick={() => toggleRow(group.ticker)} style={{ cursor: 'pointer', padding: '4px', borderRadius: '4px', backgroundColor: '#0b0f19', color: '#38bdf8' }}>
+                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                           </div>
-                          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>{h.ticker} • {h.type.toUpperCase()}</div>
+                          {editingId === group.ticker ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <input
+                                type="text"
+                                value={editingNameValue}
+                                onChange={(e) => setEditingNameValue(e.target.value)}
+                                style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #38bdf8', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px', fontWeight: 'bold' }}
+                              />
+                              <button onClick={() => saveCustomNameForTicker(group.ticker, editingNameValue)} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer' }}>
+                                <Check size={18} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div onClick={() => { setEditingId(group.ticker); setEditingNameValue(group.name); }} style={{ cursor: 'pointer' }}>
+                              <div style={{ fontWeight: '700', color: '#fff', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>{group.name}</span>
+                                <Edit2 size={12} color="#475569" />
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+                                {group.ticker} • {group.type.toUpperCase()} ({group.lots.length} {group.lots.length === 1 ? 'transakcja' : 'transakcji'})
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px 18px', fontSize: '13px', color: '#94a3b8' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Calendar size={13} color="#64748b" />
-                        <span>{h.purchaseDate || getTodayString()}</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.shares}</td>
-                    <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.buyPrice.toFixed(2)} {currencySymbol}</td>
-                    <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.currentPrice.toFixed(2)} {currencySymbol}</td>
-                    <td style={{ padding: '14px 18px', fontWeight: 'bold', fontSize: '14px' }}>{valPLN.toFixed(2)} zł</td>
-                    <td style={{ padding: '14px 18px', color: profitPLN >= 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold', fontSize: '14px' }}>
-                      {profitPLN >= 0 ? '+' : ''}{profitPLN.toFixed(2)} zł ({profitPct.toFixed(2)}%)
-                    </td>
-                    <td style={{ padding: '14px 18px', textAlign: 'center' }}>
-                      <button onClick={() => removeHolding(h.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
+                      </td>
+                      <td style={{ padding: '14px 18px', fontSize: '13px', color: '#94a3b8', fontStyle: 'italic' }}>
+                        {group.lots.length === 1 ? group.lots[0].purchaseDate : 'Wiele terminów'}
+                      </td>
+                      <td style={{ padding: '14px 18px', fontSize: '15px', fontWeight: 'bold' }}>
+                        {group.totalShares.toFixed(4).replace(/\.?0+$/, '')}
+                      </td>
+                      <td style={{ padding: '14px 18px', fontSize: '14px' }}>
+                        {group.avgBuyPrice.toFixed(2)} {currencySymbol}
+                      </td>
+                      <td style={{ padding: '14px 18px', fontSize: '14px' }}>
+                        {group.currentPrice.toFixed(2)} {currencySymbol}
+                      </td>
+                      <td style={{ padding: '14px 18px', fontWeight: 'bold', fontSize: '14px' }}>
+                        {groupValPLN.toFixed(2)} zł
+                      </td>
+                      <td style={{ padding: '14px 18px', color: groupProfitPLN >= 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold', fontSize: '14px' }}>
+                        {groupProfitPLN >= 0 ? '+' : ''}{groupProfitPLN.toFixed(2)} zł ({groupProfitPct.toFixed(2)}%)
+                      </td>
+                      <td style={{ padding: '14px 18px', textAlign: 'center' }}>
+                        <button onClick={() => removeAllLots(group.ticker)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', opacity: 0.6 }} title="Usuń całą pozycję">
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+
+                    {isExpanded && group.lots
+                      .sort((a: any, b: any) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime())
+                      .map((lot: any) => {
+                        const lotValPLN = getPLNValue(lot.shares * lot.currentPrice, lot.currency);
+                        const lotCostPLN = getPLNValue(lot.shares * lot.buyPrice, lot.currency);
+                        const lotProfitPLN = lotValPLN - lotCostPLN;
+                        const lotProfitPct = lotCostPLN > 0 ? (lotProfitPLN / lotCostPLN) * 100 : 0;
+
+                        return (
+                          <tr key={lot.id} style={{ borderBottom: '1px solid #1e293b', backgroundColor: 'rgba(15, 23, 42, 0.6)' }}>
+                            <td style={{ padding: '10px 18px 10px 50px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#64748b', fontSize: '12px' }}>
+                                <CornerDownRight size={14} /> Partia
+                              </div>
+                            </td>
+                            <td style={{ padding: '10px 18px', fontSize: '12px', color: '#94a3b8' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <Calendar size={12} /> {lot.purchaseDate || getTodayString()}
+                              </div>
+                            </td>
+                            <td style={{ padding: '10px 18px', fontSize: '13px', color: '#cbd5e1' }}>{lot.shares}</td>
+                            <td style={{ padding: '10px 18px', fontSize: '13px', color: '#cbd5e1' }}>{lot.buyPrice.toFixed(2)} {currencySymbol}</td>
+                            <td style={{ padding: '10px 18px', fontSize: '13px', color: '#475569' }}>—</td>
+                            <td style={{ padding: '10px 18px', fontSize: '13px', color: '#cbd5e1' }}>{lotValPLN.toFixed(2)} zł</td>
+                            <td style={{ padding: '10px 18px', color: lotProfitPLN >= 0 ? '#22c55e' : '#ef4444', fontSize: '13px' }}>
+                              {lotProfitPLN >= 0 ? '+' : ''}{lotProfitPLN.toFixed(2)} zł ({lotProfitPct.toFixed(2)}%)
+                            </td>
+                            <td style={{ padding: '10px 18px', textAlign: 'center' }}>
+                              <button onClick={() => removeHolding(lot.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', opacity: 0.8 }} title="Usuń tylko tę transzę">
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                    })}
+                  </React.Fragment>
                 );
               })}
             </tbody>
