@@ -14,8 +14,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.2.3';
-const BUILD_TIME = '2026-10-06 23:10';
+const APP_VERSION = 'v2.3.0';
+const BUILD_TIME = '2026-10-06 23:45';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -31,7 +31,7 @@ const translateAuthError = (message: string): string => {
   if (msg.includes('user already registered') || msg.includes('already exists')) return 'Konto o tym adresie e-mail już istnieje.';
   if (msg.includes('password should be at least')) return 'Hasło musi mieć co najmniej 6 znaków.';
   if (msg.includes('unable to validate email address')) return 'Wprowadź poprawny adres e-mail.';
-  if (msg.includes('email not confirmed')) return 'Adres e-mail nie został jeszcze potwierdzony.';
+  if (msg.includes('email not confirmed')) return 'Adres e-mail not confirmed.';
   if (msg.includes('rate limit')) return 'Zbyt wiele prób. Spróbuj ponownie za chwilę.';
   return 'Wystąpił błąd autoryzacji: ' + message;
 };
@@ -62,6 +62,8 @@ export default function App() {
   const [purchaseDate, setPurchaseDate] = useState<string>(getTodayString());
   const [loading, setLoading] = useState(false);
   const [showXtbHelp, setShowXtbHelp] = useState(false);
+
+  const [searchTimeout, setSearchTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
@@ -214,14 +216,18 @@ export default function App() {
     setLoading(false);
   };
 
-  const handleTickerChange = async (value: string) => {
+  const handleTickerChange = (value: string) => {
     setTicker(value);
     setSelectedName('');
 
+    if (searchTimeout) clearTimeout(searchTimeout);
+
     if (value.trim().length >= 1) {
-      const results = await searchGlobalBaza(value);
-      setSuggestions(results);
-      setShowSuggestions(results.length > 0);
+      setSearchTimeout(setTimeout(async () => {
+        const results = await searchGlobalBaza(value);
+        setSuggestions(results);
+        setShowSuggestions(results.length > 0);
+      }, 400));
     } else {
       setSuggestions([]);
       setShowSuggestions(false);
@@ -302,11 +308,15 @@ export default function App() {
   const refreshPrices = async () => {
     if (holdings.length === 0) return;
     setLoading(true);
+    let successCount = 0;
+
     await refreshExchangeRates();
 
     const updatedHoldings = await Promise.all(
       holdings.map(async (item) => {
         const stockData = await fetchStockPriceAndName(item.ticker, item.name);
+        if (stockData.price !== null) successCount++;
+        
         const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
 
         if (user) {
@@ -327,6 +337,12 @@ export default function App() {
 
     setHoldings(updatedHoldings);
     setLoading(false);
+    
+    if (successCount === 0) {
+      alert('Nie udało się pobrać aktualnych kursów z serwerów giełdowych. Spróbuj ponownie za chwilę.');
+    } else {
+      alert(`Pomyślnie zaktualizowano kursy z giełdy! (Zaktualizowano ${successCount} pozycji)`);
+    }
   };
 
   const saveCustomNameForTicker = async (tickerGroup: string, newName: string) => {
@@ -452,7 +468,6 @@ export default function App() {
               if (!resolvedName || resolvedName.toUpperCase() === rawTicker || resolvedName.includes('.WA')) {
                 if (meta?.name) resolvedName = meta.name;
               }
-              // Blokujemy wspólną cenę w cache, by wszystkie partie używały tej samej "startowej" wartości do czasu odświeżenia
               apiCache[rawTicker] = {
                 name: resolvedName || rawTicker,
                 type: stockData.type,
@@ -781,17 +796,17 @@ export default function App() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '28px' }}>
           <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
             <span style={{ color: '#64748b', fontSize: '13px' }}>Wartość Portfela</span>
-            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700' }}>{totalValuePLN.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł</h2>
+            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700' }}>{totalValuePLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł</h2>
           </div>
           <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
             <span style={{ color: '#64748b', fontSize: '13px' }}>Koszt Zakupu</span>
-            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700' }}>{totalCostPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł</h2>
+            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700' }}>{totalCostPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł</h2>
           </div>
           <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
             <span style={{ color: '#64748b', fontSize: '13px' }}>Zysk / Strata całkowita</span>
             <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700', color: totalProfitLossPLN >= 0 ? '#22c55e' : '#ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
               {totalProfitLossPLN >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
-              {totalProfitLossPLN >= 0 ? '+' : ''}{totalProfitLossPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł ({totalProfitLossPercent.toFixed(2)}%)
+              {totalProfitLossPLN >= 0 ? '+' : ''}{totalProfitLossPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł ({totalProfitLossPercent.toFixed(2)}%)
             </h2>
           </div>
         </div>
@@ -857,6 +872,7 @@ export default function App() {
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <input
               type="date"
+              lang="pl-PL"
               value={purchaseDate}
               onChange={(e) => setPurchaseDate(e.target.value)}
               title="Data zakupu"
@@ -975,7 +991,6 @@ export default function App() {
                     {isExpanded && group.lots
                       .sort((a: any, b: any) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime())
                       .map((lot: any) => {
-                        // KRYTYCZNA POPRAWKA: Używamy grupowego (ogólnego) aktualnego kursu dla poszczególnej partii!
                         const lotValPLN = getPLNValue(lot.shares * group.currentPrice, lot.currency);
                         const lotCostPLN = getPLNValue(lot.shares * lot.buyPrice, lot.currency);
                         const lotProfitPLN = lotValPLN - lotCostPLN;

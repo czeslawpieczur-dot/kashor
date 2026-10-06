@@ -1,12 +1,74 @@
-import { GLOBAL_DATABASE } from '../data/globalBaza';
-import type { AssetMeta } from '../data/globalBaza';
-import type { TickerSuggestion } from '../types';
+import type { TickerSuggestion, AssetType } from '../types';
+
+export interface AssetMeta {
+  symbol: string;
+  name: string;
+  type: AssetType;
+  currency: string;
+}
+
+export const GLOBAL_DATABASE: AssetMeta[] = [
+  { symbol: 'CDR.WA', name: 'CD Projekt S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'PKO.WA', name: 'PKO Bank Polski', type: 'stock', currency: 'PLN' },
+  { symbol: 'PEO.WA', name: 'Bank Pekao S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'KGH.WA', name: 'KGHM Polska Miedź', type: 'stock', currency: 'PLN' },
+  { symbol: 'PKN.WA', name: 'ORLEN S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'DNP.WA', name: 'Dino Polska S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'LPP.WA', name: 'LPP S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'ALE.WA', name: 'Allegro.eu S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'PZU.WA', name: 'PZU S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'SPL.WA', name: 'Santander Bank Polska', type: 'stock', currency: 'PLN' },
+  { symbol: 'KRU.WA', name: 'KRUK S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'XTB.WA', name: 'XTB S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'CPS.WA', name: 'Cyfrowy Polsat S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'PGE.WA', name: 'PGE Polska Grupa Energetyczna', type: 'stock', currency: 'PLN' },
+  { symbol: 'SNT.WA', name: 'Synektik S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'ATR.WA', name: 'Atrem S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'WTC.WA', name: 'Wirtualna Polska Holding', type: 'stock', currency: 'PLN' },
+  { symbol: 'DOM.WA', name: 'Dom Development S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'S2B.WA', name: 'Software Incentive Group', type: 'stock', currency: 'PLN' },
+  { symbol: 'ABE.WA', name: 'AB S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'TPE.WA', name: 'Tauron Polska Energia', type: 'stock', currency: 'PLN' },
+  { symbol: 'ALR.WA', name: 'Alior Bank S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'BHW.WA', name: 'Bank Handlowy', type: 'stock', currency: 'PLN' },
+  { symbol: 'MBK.WA', name: 'mBank S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'CCC.WA', name: 'CCC S.A.', type: 'stock', currency: 'PLN' },
+  { symbol: 'TEN.WA', name: 'Ten Square Games', type: 'stock', currency: 'PLN' },
+  { symbol: '11B.WA', name: '11 bit studios', type: 'stock', currency: 'PLN' },
+
+  { symbol: 'ETFBM40TR.WA', name: 'Beta ETF mWIG40TR', type: 'etf', currency: 'PLN' },
+  { symbol: 'ETFBS80TR.WA', name: 'Beta ETF sWIG80TR', type: 'etf', currency: 'PLN' },
+  { symbol: 'ETFBW20TR.WA', name: 'Beta ETF WIG20TR', type: 'etf', currency: 'PLN' },
+  { symbol: 'ETFBSPX.WA', name: 'Beta ETF S&P 500 PLN-Hedged', type: 'etf', currency: 'PLN' },
+  { symbol: 'ETFNDX.WA', name: 'Beta ETF Nasdaq-100 PLN-Hedged', type: 'etf', currency: 'PLN' },
+  { symbol: 'IWDA.UK', name: 'iShares Core MSCI World UCITS ETF', type: 'etf', currency: 'USD' },
+  { symbol: 'VWCE.DE', name: 'Vanguard FTSE All-World UCITS ETF', type: 'etf', currency: 'EUR' },
+  { symbol: 'EUNL.DE', name: 'iShares Core MSCI World EUR', type: 'etf', currency: 'EUR' },
+  { symbol: 'SWRD.L', name: 'SPDR MSCI World UCITS ETF', type: 'etf', currency: 'USD' },
+
+  { symbol: 'AAPL', name: 'Apple Inc.', type: 'stock', currency: 'USD' },
+  { symbol: 'MSFT', name: 'Microsoft Corporation', type: 'stock', currency: 'USD' },
+  { symbol: 'NVDA', name: 'NVIDIA Corporation', type: 'stock', currency: 'USD' },
+  { symbol: 'AMZN', name: 'Amazon.com Inc.', type: 'stock', currency: 'USD' },
+  { symbol: 'GOOGL', name: 'Alphabet Inc. (Google)', type: 'stock', currency: 'USD' },
+  { symbol: 'META', name: 'Meta Platforms Inc.', type: 'stock', currency: 'USD' },
+  { symbol: 'TSLA', name: 'Tesla Inc.', type: 'stock', currency: 'USD' },
+  { symbol: 'AMD', name: 'Advanced Micro Devices', type: 'stock', currency: 'USD' },
+  { symbol: 'INTC', name: 'Intel Corporation', type: 'stock', currency: 'USD' },
+  { symbol: 'PLTR', name: 'Palantir Technologies', type: 'stock', currency: 'USD' },
+
+  { symbol: 'BTC-USD', name: 'Bitcoin', type: 'crypto', currency: 'USD' },
+  { symbol: 'ETH-USD', name: 'Ethereum', type: 'crypto', currency: 'USD' },
+  { symbol: 'SOL-USD', name: 'Solana', type: 'crypto', currency: 'USD' },
+  { symbol: 'GC=F', name: 'Złoto (Gold Futures)', type: 'commodity', currency: 'USD' },
+  { symbol: 'SI=F', name: 'Srebro (Silver Futures)', type: 'commodity', currency: 'USD' },
+  { symbol: 'CL=F', name: 'Ropa Naftowa Crude Oil', type: 'commodity', currency: 'USD' },
+];
 
 export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[]> => {
   const cleanQuery = query.trim().toLowerCase();
   if (!cleanQuery) return [];
 
-  // 1. Dopasowanie lokalne
   const localMatches: TickerSuggestion[] = GLOBAL_DATABASE.filter(
     item =>
       item.symbol.toLowerCase().includes(cleanQuery) ||
@@ -19,11 +81,10 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
     exchDisp: item.symbol.endsWith('.WA') ? 'GPW' : item.type.toUpperCase(),
   }));
 
-  // 2. Wyszukiwanie sieciowe
+  // Wyszukiwanie sieciowe przez darmowe proxy AllOrigins
   try {
-    const searchUrl = `https://corsproxy.io/?${encodeURIComponent(
-      `https://query1.finance.yahoo.com/v1/finance/search?q=${cleanQuery}&quotesCount=10&newsCount=0`
-    )}`;
+    const targetUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${cleanQuery}&quotesCount=10&newsCount=0`;
+    const searchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
     
     const apiRes = await fetch(searchUrl);
     if (apiRes.ok) {
@@ -37,7 +98,7 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
           const name = q.longname || q.shortname || sym;
           const isPL = sym.endsWith('.WA');
           
-          let type: 'stock' | 'etf' | 'commodity' | 'crypto' = 'stock';
+          let type: AssetType = 'stock';
           if (q.quoteType === 'ETF') type = 'etf';
           if (q.quoteType === 'CRYPTOCURRENCY' || sym.includes('-USD')) type = 'crypto';
 
@@ -66,6 +127,13 @@ export const searchGlobalBaza = async (query: string): Promise<TickerSuggestion[
 };
 
 export const getMetaBySymbol = (symbol: string): AssetMeta | undefined => {
+  if (!symbol) return undefined;
   const clean = symbol.trim().toUpperCase();
-  return GLOBAL_DATABASE.find(item => item.symbol.toUpperCase() === clean);
+  const rawSymbol = clean.replace('.WA', '').replace('.PL', '').replace('.US', '');
+
+  return GLOBAL_DATABASE.find(item => {
+    const itemSym = item.symbol.toUpperCase();
+    const itemRaw = itemSym.replace('.WA', '').replace('.PL', '').replace('.US', '');
+    return itemSym === clean || itemRaw === rawSymbol;
+  });
 };
