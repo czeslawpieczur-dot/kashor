@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Wallet, Trash2, Edit2, Check, ArrowUpDown, ArrowUp, ArrowDown, 
   Search, Plus, RefreshCw, Upload, Eraser, LogOut, KeyRound, 
-  TrendingUp, TrendingDown 
+  TrendingUp, TrendingDown, Calendar 
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -13,14 +13,16 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.0.1';
-const BUILD_TIME = '2026-10-06 19:00';
+const APP_VERSION = 'v2.1.0';
+const BUILD_TIME = '2026-10-06 19:10';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
   '#ec4899', '#06b6d4', '#10b981', '#f43f5e', '#6366f1',
   '#8b5cf6', '#d946ef', '#64748b'
 ];
+
+const getTodayString = () => new Date().toISOString().split('T')[0];
 
 const translateAuthError = (message: string): string => {
   const msg = message.toLowerCase();
@@ -56,6 +58,7 @@ export default function App() {
   const [shares, setShares] = useState('');
   const [buyPrice, setBuyPrice] = useState('');
   const [currency, setCurrency] = useState('PLN');
+  const [purchaseDate, setPurchaseDate] = useState<string>(getTodayString());
   const [loading, setLoading] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -169,6 +172,7 @@ export default function App() {
         buyPrice: Number(item.buy_price),
         currentPrice: Number(item.current_price),
         currency: item.currency || 'PLN',
+        purchaseDate: item.purchase_date || getTodayString(),
       }));
       setHoldings(formatted);
     }
@@ -218,6 +222,7 @@ export default function App() {
       buyPrice: numPrice,
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
       currency: currency || stockData.currency,
+      purchaseDate: purchaseDate || getTodayString(),
     };
 
     setHoldings(prev => [...prev, newHoldingObj]);
@@ -233,6 +238,7 @@ export default function App() {
         buy_price: numPrice,
         current_price: newHoldingObj.currentPrice,
         currency: newHoldingObj.currency,
+        purchase_date: newHoldingObj.purchaseDate,
       }]);
 
       if (error) {
@@ -246,6 +252,7 @@ export default function App() {
     setSelectedName('');
     setShares('');
     setBuyPrice('');
+    setPurchaseDate(getTodayString());
     setShowSuggestions(false);
     setLoading(false);
   };
@@ -360,6 +367,7 @@ export default function App() {
             buyPrice: price,
             currentPrice: stockData.price || price,
             currency: stockData.currency,
+            purchaseDate: getTodayString(),
           });
         }
 
@@ -375,6 +383,7 @@ export default function App() {
             buy_price: h.buyPrice,
             current_price: h.currentPrice,
             currency: h.currency,
+            purchase_date: h.purchaseDate,
           }));
           await supabase.from('holdings').insert(supabaseRows);
           fetchHoldingsFromSupabase();
@@ -605,7 +614,7 @@ export default function App() {
         {/* WYKRES ALOKACJI */}
         <AllocationChart data={rawChartData} colors={CHART_COLORS} />
 
-        {/* FORMULARZ Z AUTOCOMPLETE */}
+        {/* FORMULARZ Z KALENDARZEM (DATA ZAKUPU) */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
           <select
             value={assetType}
@@ -651,8 +660,8 @@ export default function App() {
             )}
           </div>
 
-          <input type="number" placeholder="Liczba" value={shares} onChange={(e) => setShares(e.target.value)} style={{ flex: 1, minWidth: '100px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
-          <input type="number" step="0.01" placeholder="Cena zakupu" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} style={{ flex: 1, minWidth: '120px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+          <input type="number" placeholder="Liczba" value={shares} onChange={(e) => setShares(e.target.value)} style={{ flex: 1, minWidth: '90px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
+          <input type="number" step="0.01" placeholder="Cena zakupu" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} style={{ flex: 1, minWidth: '110px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff' }} />
           
           <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#38bdf8', fontWeight: 'bold' }}>
             <option value="PLN">PLN</option>
@@ -660,12 +669,23 @@ export default function App() {
             <option value="EUR">EUR</option>
           </select>
 
+          {/* DEDYKOWANE POLE DATY Z KALENDARZEM */}
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <input
+              type="date"
+              value={purchaseDate}
+              onChange={(e) => setPurchaseDate(e.target.value)}
+              title="Data zakupu"
+              style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#94a3b8', fontSize: '13px' }}
+            />
+          </div>
+
           <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Plus size={18} /> Dodaj
           </button>
         </form>
 
-        {/* TABELA Z DUŻĄ NAZWĄ NA GÓRZE */}
+        {/* TABELA AKTYWÓW Z DATĄ ZAKUPU */}
         <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
@@ -676,6 +696,7 @@ export default function App() {
                     {sortField === 'ticker' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
                   </div>
                 </th>
+                <th style={{ padding: '14px 18px' }}>Data zakupu</th>
                 <th onClick={() => handleSort('shares')} style={{ padding: '14px 18px', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     Liczba
@@ -731,6 +752,12 @@ export default function App() {
                           <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>{h.ticker} • {h.type.toUpperCase()}</div>
                         </div>
                       )}
+                    </td>
+                    <td style={{ padding: '14px 18px', fontSize: '13px', color: '#94a3b8' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Calendar size={13} color="#64748b" />
+                        <span>{h.purchaseDate || getTodayString()}</span>
+                      </div>
                     </td>
                     <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.shares}</td>
                     <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.buyPrice.toFixed(2)} {currencySymbol}</td>

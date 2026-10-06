@@ -59,3 +59,29 @@ export const fetchNbpRates = async () => {
 
   return { usd, eur };
 };
+
+export const fetchNbpHistoricalRate = async (currency: string, dateStr: string): Promise<number | null> => {
+  if (currency === 'PLN') return 1;
+  const curr = currency.toLowerCase();
+  
+  try {
+    // Zapytanie o kurs z konkretnego dnia
+    const res = await fetch(`https://api.nbp.pl/api/exchangerates/rates/a/${curr}/${dateStr}/?format=json`);
+    if (res.ok) {
+      const data = await res.json();
+      return data?.rates?.[0]?.mid || null;
+    }
+    
+    // Jeśli weekend/święto – pobieramy tabelę z ostatnich 10 dni przed tą datą
+    const fallbackRes = await fetch(`https://api.nbp.pl/api/exchangerates/rates/a/${curr}/last/10/?format=json`);
+    if (fallbackRes.ok) {
+      const fallbackData = await fallbackRes.json();
+      const rates = fallbackData?.rates || [];
+      const match = rates.filter((r: any) => r.effectiveDate <= dateStr).pop();
+      return match ? match.mid : rates[0]?.mid || null;
+    }
+  } catch (err) {
+    console.error('Błąd pobierania kursu historycznego NBP:', err);
+  }
+  return null;
+};
