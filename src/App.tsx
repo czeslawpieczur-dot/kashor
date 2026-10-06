@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown, X, LineChart as LineChartIcon, Search } from 'lucide-react';
+import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon, ArrowUpDown, ArrowUp, ArrowDown, X, LineChart as LineChartIcon, Search, KeyRound } from 'lucide-react';
 import Papa from 'papaparse';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.5.0';
-const BUILD_TIME = '2026-10-06 15:45';
+const APP_VERSION = 'v1.5.1';
+const BUILD_TIME = '2026-10-06 18:15';
 
 interface Holding {
   id: string;
@@ -39,6 +39,18 @@ const CHART_COLORS = [
   '#8b5cf6', '#d946ef', '#64748b'
 ];
 
+// TŁUMACZENIE BŁĘDÓW SUPABASE NA JĘZYK POLSKI
+const translateAuthError = (message: string): string => {
+  const msg = message.toLowerCase();
+  if (msg.includes('invalid login credentials')) return 'Nieprawidłowy e-mail lub hasło.';
+  if (msg.includes('user already registered') || msg.includes('already exists')) return 'Konto o tym adresie e-mail już istnieje.';
+  if (msg.includes('password should be at least')) return 'Hasło musi mieć co najmniej 6 znaków.';
+  if (msg.includes('unable to validate email address')) return 'Wprowadź poprawny adres e-mail.';
+  if (msg.includes('email not confirmed')) return 'Adres e-mail nie został jeszcze potwierdzony.';
+  if (msg.includes('rate limit')) return 'Zbyt wiele prób. Spróbuj ponownie za chwilę.';
+  return 'Wystąpił błąd autoryzacji: ' + message;
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isGuest, setIsGuest] = useState<boolean>(() => {
@@ -48,8 +60,12 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [isPasswordResetMode, setIsPasswordResetMode] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
 
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [usdPln, setUsdPln] = useState<number>(3.88);
@@ -103,7 +119,10 @@ export default function App() {
       setAuthLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordResetMode(true);
+      }
       if (session?.user) {
         setUser(session.user);
         setIsGuest(false);
@@ -181,7 +200,6 @@ export default function App() {
     fetchExchangeRates();
   }, []);
 
-  // WYSZUKIWANIE DANYCH WALUTOWYCH Z NBP DO WYKRESU
   useEffect(() => {
     if (!currencyModal.open) return;
 
@@ -210,7 +228,6 @@ export default function App() {
     fetchCurrencyHistory();
   }, [currencyModal.open, currencyModal.code, currencyModal.range]);
 
-  // LOGIKA AUTOCOMPLETE DLA TICKERÓW
   const handleTickerChange = (value: string) => {
     setTicker(value);
     setSelectedName('');
@@ -288,22 +305,49 @@ export default function App() {
     }
   };
 
+  // OBSŁUGA LOGOWANIA, REJESTRACJI I RESETOWANIA HASŁA
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+    setAuthSuccess('');
     setLoading(true);
 
-    if (isSignUp) {
+    if (isForgotPassword) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        setAuthError(translateAuthError(error.message));
+      } else {
+        setAuthSuccess('Wysłano link do zresetowania hasła. Sprawdź swoją skrzynkę e-mail!');
+      }
+    } else if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email, password });
       if (error) {
-        setAuthError(error.message);
+        setAuthError(translateAuthError(error.message));
       } else {
-        alert('Konto zostało utworzone! Możesz się teraz zalogować.');
+        setAuthSuccess('Konto zostało utworzone! Możesz się teraz zalogować.');
         setIsSignUp(false);
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) setAuthError(error.message);
+      if (error) setAuthError(translateAuthError(error.message));
+    }
+    setLoading(false);
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+    setLoading(true);
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      setAuthError(translateAuthError(error.message));
+    } else {
+      setAuthSuccess('Hasło zostało pomyślnie zmienione! Zostałeś zalogowany.');
+      setIsPasswordResetMode(false);
     }
     setLoading(false);
   };
@@ -551,7 +595,6 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
-  // DANE WYKRESU
   const rawChartData = holdings.map((h) => {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
     return {
@@ -595,6 +638,58 @@ export default function App() {
     );
   }
 
+  // FORMULARZ NOWEGO HASŁA (PO KLIKNIĘCIU W LINK W MAILU)
+  if (isPasswordResetMode) {
+    return (
+      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', boxSizing: 'border-box' }}>
+        <div style={{ backgroundColor: '#151d30', padding: '40px', borderRadius: '16px', border: '1px solid #1e293b', maxWidth: '400px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)' }}>
+          <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+            <KeyRound size={48} color="#38bdf8" style={{ marginBottom: '10px' }} />
+            <h1 style={{ margin: 0, fontSize: '24px' }}>Ustaw nowe hasło</h1>
+            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '6px' }}>Wprowadź swoje nowe hasło poniżej.</p>
+          </div>
+
+          <form onSubmit={handleUpdatePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', color: '#94a3b8', fontSize: '13px', marginBottom: '6px' }}>Nowe hasło</label>
+              <div style={{ position: 'relative' }}>
+                <Lock size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: '#64748b' }} />
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
+            {authError && <div style={{ color: '#ef4444', fontSize: '13px', textAlign: 'center' }}>{authError}</div>}
+            {authSuccess && <div style={{ color: '#22c55e', fontSize: '13px', textAlign: 'center' }}>{authSuccess}</div>}
+
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                padding: '12px',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: '#38bdf8',
+                color: '#0b0f19',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+              }}
+            >
+              {loading ? 'Zapisywanie...' : 'Zapisz nowe hasło'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // EKRAN LOGOWANIA / REJESTRACJI / ZAPOMNIANEGO HASŁA
   if (!user && !isGuest) {
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
@@ -603,7 +698,9 @@ export default function App() {
             <div style={{ textAlign: 'center', marginBottom: '30px' }}>
               <Wallet size={48} color="#38bdf8" style={{ marginBottom: '10px' }} />
               <h1 style={{ margin: 0, fontSize: '28px', letterSpacing: '-0.5px' }}>Kashor</h1>
-              <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '6px' }}>Tracker portfela inwestycyjnego</p>
+              <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '6px' }}>
+                {isForgotPassword ? 'Resetowanie hasła' : isSignUp ? 'Rejestracja konta' : 'Logowanie do portfela'}
+              </p>
             </div>
 
             <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -622,24 +719,36 @@ export default function App() {
                 </div>
               </div>
 
-              <div>
-                <label style={{ display: 'block', color: '#94a3b8', fontSize: '13px', marginBottom: '6px' }}>Hasło</label>
-                <div style={{ position: 'relative' }}>
-                  <Lock size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: '#64748b' }} />
-                  <input
-                    type="password"
-                    required
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }}
-                  />
+              {!isForgotPassword && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <label style={{ color: '#94a3b8', fontSize: '13px' }}>Hasło</label>
+                    {!isSignUp && (
+                      <button
+                        type="button"
+                        onClick={() => { setIsForgotPassword(true); setAuthError(''); setAuthSuccess(''); }}
+                        style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '12px', cursor: 'pointer', padding: 0 }}
+                      >
+                        Zapomniałeś hasła?
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ position: 'relative' }}>
+                    <Lock size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: '#64748b' }} />
+                    <input
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }}
+                    />
+                  </div>
                 </div>
-              </div>
-
-              {authError && (
-                <div style={{ color: '#ef4444', fontSize: '13px', textAlign: 'center' }}>{authError}</div>
               )}
+
+              {authError && <div style={{ color: '#ef4444', fontSize: '13px', textAlign: 'center' }}>{authError}</div>}
+              {authSuccess && <div style={{ color: '#22c55e', fontSize: '13px', textAlign: 'center' }}>{authSuccess}</div>}
 
               <button
                 type="submit"
@@ -655,17 +764,26 @@ export default function App() {
                   marginTop: '10px',
                 }}
               >
-                {loading ? 'Przetwarzanie...' : isSignUp ? 'Zarejestruj się' : 'Zaloguj się'}
+                {loading ? 'Przetwarzanie...' : isForgotPassword ? 'Wyślij link do resetu' : isSignUp ? 'Zarejestruj się' : 'Zaloguj się'}
               </button>
             </form>
 
             <div style={{ textAlign: 'center', marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <button
-                onClick={() => { setIsSignUp(!isSignUp); setAuthError(''); }}
-                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '13px', textDecoration: 'underline' }}
-              >
-                {isSignUp ? 'Masz już konto? Zaloguj się' : 'Nie masz konta? Zarejestruj się'}
-              </button>
+              {isForgotPassword ? (
+                <button
+                  onClick={() => { setIsForgotPassword(false); setAuthError(''); setAuthSuccess(''); }}
+                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '13px', textDecoration: 'underline' }}
+                >
+                  Powrót do logowania
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setIsSignUp(!isSignUp); setAuthError(''); setAuthSuccess(''); }}
+                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '13px', textDecoration: 'underline' }}
+                >
+                  {isSignUp ? 'Masz już konto? Zaloguj się' : 'Nie masz konta? Zarejestruj się'}
+                </button>
+              )}
 
               <button
                 onClick={handleGuestLogin}
@@ -713,7 +831,6 @@ export default function App() {
               <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <span>Status: <strong style={{ color: user ? '#22c55e' : '#eab308' }}>{user ? `Zalogowany (${user.email})` : 'Tryb Lokalny (Gość)'}</strong></span>
                 
-                {/* INTERAKTYWNE KURSY WALUT (KLIKALNE) */}
                 <span
                   onClick={() => setCurrencyModal({ open: true, code: 'USD', range: '1M' })}
                   style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
@@ -897,9 +1014,8 @@ export default function App() {
           </div>
         )}
 
-        {/* FORMULARZ DODAWANIA AKCJI Z DYNAMICZNYM AUTOCOMPLETE */}
+        {/* FORMULARZ DODAWANIA AKCJI */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
-          
           <div style={{ flex: 2, minWidth: '180px', position: 'relative' }}>
             <div style={{ position: 'relative' }}>
               <input
@@ -913,7 +1029,6 @@ export default function App() {
               <Search size={16} style={{ position: 'absolute', right: '12px', top: '12px', color: '#64748b' }} />
             </div>
 
-            {/* ROZWIJANA LISTA PODPOWIEDZI */}
             {showSuggestions && (
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: '6px', backgroundColor: '#0b0f19', border: '1px solid #334155', borderRadius: '8px', zIndex: 100, maxHeight: '220px', overflowY: 'auto', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
                 {searchLoading ? (
@@ -971,7 +1086,7 @@ export default function App() {
           </button>
         </form>
 
-        {/* TABELA POSIADANYCH AKCJI Z SORTOWANIEM */}
+        {/* TABELA POSIADANYCH AKCJI */}
         <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
@@ -1069,7 +1184,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* PRZEŁĄCZNIK ZAKRESÓW */}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
               {(['1M', '3M', '1R'] as const).map((r) => (
                 <button
@@ -1091,7 +1205,6 @@ export default function App() {
               ))}
             </div>
 
-            {/* WYKRES DANYCH Z NBP */}
             <div style={{ height: '240px', width: '100%' }}>
               {currencyHistoryLoading ? (
                 <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Pobieranie historii kursu z NBP...</div>
