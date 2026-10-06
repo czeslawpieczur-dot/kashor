@@ -5,10 +5,9 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAx
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.5.3';
-const BUILD_TIME = '2026-10-06 18:25';
+const APP_VERSION = 'v1.5.4';
+const BUILD_TIME = '2026-10-06 18:35';
 
-// SŁOWNIK POPULARNYCH SPÓŁEK (GPW / USA / ETF)
 const KNOWN_NAMES: { [key: string]: string } = {
   'PKO.WA': 'PKO Bank Polski',
   'PEO.WA': 'Bank Pekao',
@@ -49,6 +48,7 @@ interface Holding {
   id: string;
   ticker: string;
   name: string;
+  type: 'stock' | 'etf';
   shares: number;
   buyPrice: number;
   currentPrice: number;
@@ -109,6 +109,7 @@ export default function App() {
 
   const [ticker, setTicker] = useState('');
   const [selectedName, setSelectedName] = useState('');
+  const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock');
   const [shares, setShares] = useState('');
   const [buyPrice, setBuyPrice] = useState('');
   const [currency, setCurrency] = useState('PLN');
@@ -214,6 +215,7 @@ export default function App() {
           id: item.id,
           ticker: item.ticker,
           name: bestName,
+          type: item.type || 'stock',
           shares: Number(item.shares),
           buyPrice: Number(item.buy_price),
           currentPrice: Number(item.current_price),
@@ -311,6 +313,9 @@ export default function App() {
     setTicker(s.symbol);
     setSelectedName(s.name);
     setShowSuggestions(false);
+
+    if (s.typeDisp?.toLowerCase().includes('etf')) setAssetType('etf');
+    else setAssetType('stock');
 
     if (s.symbol.endsWith('.WA')) setCurrency('PLN');
     else if (s.symbol.endsWith('.DE') || s.symbol.endsWith('.PA') || s.symbol.endsWith('.AS')) setCurrency('EUR');
@@ -444,6 +449,7 @@ export default function App() {
       id: newId,
       ticker: cleanTicker,
       name: finalName,
+      type: assetType,
       shares: numShares,
       buyPrice: numPrice,
       currentPrice: stockData.price !== null ? stockData.price : numPrice,
@@ -456,6 +462,7 @@ export default function App() {
         user_id: user.id,
         ticker: cleanTicker,
         name: finalName,
+        type: assetType,
         shares: numShares,
         buy_price: numPrice,
         current_price: newHoldingObj.currentPrice,
@@ -558,11 +565,13 @@ export default function App() {
           const id = Date.now().toString() + Math.random().toString();
           const stockData = await fetchStockData(symbol);
           const nameToUse = KNOWN_NAMES[symbol] || stockData.name || symbol;
+          const detectedType: 'stock' | 'etf' = symbol.toLowerCase().includes('etf') || symbol.endsWith('.DE') ? 'etf' : 'stock';
 
           importedHoldings.push({
             id,
             ticker: symbol,
             name: nameToUse,
+            type: detectedType,
             shares: parseFloat(data.totalShares.toFixed(4)),
             buyPrice: parseFloat(avgBuyPrice.toFixed(2)),
             currentPrice: parseFloat(data.latestCurrentPrice.toFixed(2)),
@@ -575,6 +584,7 @@ export default function App() {
               user_id: user.id,
               ticker: symbol,
               name: nameToUse,
+              type: detectedType,
               shares: parseFloat(data.totalShares.toFixed(4)),
               buy_price: parseFloat(avgBuyPrice.toFixed(2)),
               current_price: parseFloat(data.latestCurrentPrice.toFixed(2)),
@@ -659,9 +669,10 @@ export default function App() {
 
   const rawChartData = holdings.map((h) => {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
+    const displayName = companyNames[h.ticker] || KNOWN_NAMES[h.ticker] || h.name || h.ticker;
     return {
       ticker: h.ticker,
-      name: companyNames[h.ticker] || KNOWN_NAMES[h.ticker] || h.name || h.ticker,
+      name: displayName,
       value: parseFloat(valuePLN.toFixed(2)),
       percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
     };
@@ -1051,6 +1062,7 @@ export default function App() {
                 </ResponsiveContainer>
               </div>
 
+              {/* LEGENDA WYKRESU: TYLKO NAZWA GŁÓWNA + TICKER POD SPODEM */}
               <div style={{ maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {rawChartData.map((item, index) => (
@@ -1058,8 +1070,8 @@ export default function App() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
                         <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: CHART_COLORS[index % CHART_COLORS.length], flexShrink: 0 }} />
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontWeight: '700', color: '#fff' }}>{item.ticker}</span>
-                          <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>{item.name}</span>
+                          <span style={{ fontWeight: '700', color: '#fff', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '170px' }}>{item.name}</span>
+                          <span style={{ fontSize: '11px', color: '#64748b' }}>{item.ticker}</span>
                         </div>
                       </div>
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -1074,8 +1086,18 @@ export default function App() {
           </div>
         )}
 
-        {/* FORMULARZ DODAWANIA AKCJI */}
+        {/* FORMULARZ DODAWANIA AKCJI Z WYBOREM TYPU */}
         <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b', alignItems: 'center', position: 'relative' }}>
+          
+          <select
+            value={assetType}
+            onChange={(e) => setAssetType(e.target.value as 'stock' | 'etf')}
+            style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#38bdf8', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
+          >
+            <option value="stock">Akcje</option>
+            <option value="etf">ETF</option>
+          </select>
+
           <div style={{ flex: 2, minWidth: '180px', position: 'relative' }}>
             <div style={{ position: 'relative' }}>
               <input
@@ -1103,8 +1125,8 @@ export default function App() {
                       onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
                       <div>
-                        <div style={{ fontWeight: '700', color: '#38bdf8', fontSize: '13px' }}>{s.symbol}</div>
-                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>{s.name}</div>
+                        <div style={{ fontWeight: '700', color: '#38bdf8', fontSize: '13px' }}>{s.name}</div>
+                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>{s.symbol}</div>
                       </div>
                       <span style={{ fontSize: '10px', color: '#64748b', backgroundColor: '#1e293b', padding: '2px 6px', borderRadius: '4px' }}>
                         {s.exchDisp || 'Giełda'}
@@ -1142,15 +1164,15 @@ export default function App() {
           </select>
 
           <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Plus size={18} /> Dodaj Akcję
+            <Plus size={18} /> Dodaj Pozycję
           </button>
         </form>
 
-        {/* TABELA POSIADANYCH AKCJI Z EDYCJĄ NAZW */}
+        {/* TABELA POSIADANYCH AKCJI Z NAZWĄ NA GÓRZE */}
         <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
-              Portfel jest pusty. Zaimportuj plik z XTB lub dodaj akcje ręcznie powyżej!
+              Portfel jest pusty. Zaimportuj plik z XTB lub dodaj pozycje ręcznie powyżej!
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -1159,7 +1181,7 @@ export default function App() {
                   <tr style={{ backgroundColor: '#0b0f19', color: '#64748b', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     <th onClick={() => handleSort('ticker')} style={{ padding: '14px 18px', cursor: 'pointer', userSelect: 'none' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        Symbol / Spółka
+                        Nazwa / Symbol
                         {sortField === 'ticker' ? (sortOrder === 'asc' ? <ArrowUp size={14} color="#38bdf8" /> : <ArrowDown size={14} color="#38bdf8" />) : <ArrowUpDown size={14} color="#334155" />}
                       </div>
                     </th>
@@ -1199,29 +1221,33 @@ export default function App() {
                     return (
                       <tr key={h.id} style={{ borderBottom: '1px solid #1e293b' }}>
                         <td style={{ padding: '14px 18px' }}>
-                          <div style={{ fontWeight: '700', color: '#fff', fontSize: '14px' }}>{h.ticker}</div>
-                          
-                          {/* SZYBKA EDYCJA NAZWY */}
+                          {/* DUŻA NAZWA NA GÓRZE, MAŁY TICKER NA DOLE */}
                           {editingId === h.id ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <input
                                 type="text"
                                 value={editingNameValue}
                                 onChange={(e) => setEditingNameValue(e.target.value)}
-                                style={{ padding: '2px 6px', borderRadius: '4px', border: '1px solid #38bdf8', backgroundColor: '#0b0f19', color: '#fff', fontSize: '12px' }}
+                                style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #38bdf8', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px', fontWeight: 'bold' }}
                               />
                               <button onClick={() => saveCustomName(h.id, editingNameValue)} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', padding: 0 }}>
-                                <Check size={16} />
+                                <Check size={18} />
                               </button>
                             </div>
                           ) : (
                             <div
                               onClick={() => { setEditingId(h.id); setEditingNameValue(displayName); }}
-                              style={{ fontSize: '12px', color: '#64748b', marginTop: '2px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-                              title="Kliknij, aby zmienić nazwę"
+                              style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                              title="Kliknij, aby edytować nazwę"
                             >
-                              <span>{displayName}</span>
-                              <Edit2 size={12} color="#475569" />
+                              <div style={{ fontWeight: '700', color: '#fff', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>{displayName}</span>
+                                <Edit2 size={12} color="#475569" />
+                                {h.type === 'etf' && (
+                                  <span style={{ fontSize: '10px', backgroundColor: 'rgba(168, 85, 247, 0.2)', color: '#a855f7', padding: '1px 5px', borderRadius: '4px', border: '1px solid rgba(168, 85, 247, 0.4)' }}>ETF</span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>{h.ticker}</div>
                             </div>
                           )}
                         </td>
