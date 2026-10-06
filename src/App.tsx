@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon } from 'lucide-react';
 import Papa from 'papaparse';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
-const APP_VERSION = 'v1.2.2';
-const BUILD_TIME = '2026-10-06 15:15';
+const APP_VERSION = 'v1.3.0';
+const BUILD_TIME = '2026-10-06 15:25';
 
 interface Holding {
   id: string;
   ticker: string;
-  name?: string;
+  name: string;
   shares: number;
   buyPrice: number;
   currentPrice: number;
@@ -42,6 +42,18 @@ export default function App() {
   const [shares, setShares] = useState('');
   const [buyPrice, setBuyPrice] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Słownik zapamiętanych nazw spółek
+  const [companyNames, setCompanyNames] = useState<{ [ticker: string]: string }>(() => {
+    try {
+      const saved = localStorage.getItem('kashor_names');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('kashor_names', JSON.stringify(companyNames));
+  }, [companyNames]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -102,7 +114,7 @@ export default function App() {
       const formatted: Holding[] = data.map((item) => ({
         id: item.id,
         ticker: item.ticker,
-        name: item.ticker,
+        name: companyNames[item.ticker] || item.ticker,
         shares: Number(item.shares),
         buyPrice: Number(item.buy_price),
         currentPrice: Number(item.current_price),
@@ -133,20 +145,24 @@ export default function App() {
       const cleanSymbol = symbol.trim().toUpperCase();
       const response = await fetch(
         `https://corsproxy.io/?${encodeURIComponent(
-          `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${cleanSymbol}?modules=price`
+          `https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`
         )}`
       );
-      
-      if (!response.ok) return { price: null, name: cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
-      
-      const data = await response.json();
-      const priceModule = data?.quoteSummary?.result?.[0]?.price;
-      
-      const price = priceModule?.regularMarketPrice?.raw || priceModule?.regularMarketPrice;
-      const name = priceModule?.shortName || priceModule?.longName || priceModule?.symbol || cleanSymbol;
-      let currency = priceModule?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
 
-      return { price: price ? parseFloat(price) : null, name, currency };
+      if (!response.ok) return { price: null, name: cleanSymbol, currency: cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD' };
+
+      const data = await response.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+
+      const price = meta?.regularMarketPrice;
+      const fetchedName = meta?.shortName || meta?.longName || cleanSymbol;
+      let currency = meta?.currency || (cleanSymbol.endsWith('.WA') ? 'PLN' : 'USD');
+
+      if (fetchedName && fetchedName !== cleanSymbol) {
+        setCompanyNames(prev => ({ ...prev, [cleanSymbol]: fetchedName }));
+      }
+
+      return { price: price ? parseFloat(price) : null, name: fetchedName, currency };
     } catch (error) {
       return { price: null, name: symbol, currency: symbol.endsWith('.WA') ? 'PLN' : 'USD' };
     }
@@ -375,7 +391,6 @@ export default function App() {
       holdings.map(async (item) => {
         const stockData = await fetchStockData(item.ticker);
         const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
-        const newName = stockData.name && stockData.name !== item.ticker ? stockData.name : item.name || item.ticker;
 
         if (user) {
           await supabase
@@ -387,7 +402,7 @@ export default function App() {
 
         return {
           ...item,
-          name: newName,
+          name: stockData.name || item.name,
           currentPrice: newPrice,
           currency: stockData.currency,
         };
@@ -412,34 +427,15 @@ export default function App() {
     const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
     return {
       ticker: h.ticker,
-      name: h.name || h.ticker,
+      name: companyNames[h.ticker] || h.name || h.ticker,
       value: parseFloat(valuePLN.toFixed(2)),
       percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
     };
   }).sort((a, b) => b.value - a.value);
 
-  const mainItems = rawChartData.filter(item => item.percentNum >= 1.5);
-  const smallItems = rawChartData.filter(item => item.percentNum < 1.5);
-
-  const chartData = [...mainItems.map(item => ({
-    name: item.name !== item.ticker ? `${item.ticker} - ${item.name}` : item.ticker,
-    value: item.value,
-    percent: item.percentNum.toFixed(1),
-  }))];
-
-  if (smallItems.length > 0) {
-    const otherTotalValue = smallItems.reduce((sum, item) => sum + item.value, 0);
-    const otherPercent = totalValuePLN > 0 ? (otherTotalValue / totalValuePLN) * 100 : 0;
-    chartData.push({
-      name: `Pozostałe (${smallItems.length} spółek)`,
-      value: parseFloat(otherTotalValue.toFixed(2)),
-      percent: otherPercent.toFixed(1),
-    });
-  }
-
   if (authLoading) {
     return (
-      <div style={{ backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <h2>Ładowanie Kashor...</h2>
       </div>
     );
@@ -447,12 +443,12 @@ export default function App() {
 
   if (!user && !isGuest) {
     return (
-      <div style={{ fontFamily: 'system-ui, sans-serif', backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
+      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
-          <div style={{ backgroundColor: '#1e293b', padding: '40px', borderRadius: '16px', border: '1px solid #334155', maxWidth: '400px', width: '100%' }}>
+          <div style={{ backgroundColor: '#151d30', padding: '40px', borderRadius: '16px', border: '1px solid #1e293b', maxWidth: '400px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)' }}>
             <div style={{ textAlign: 'center', marginBottom: '30px' }}>
               <Wallet size={48} color="#38bdf8" style={{ marginBottom: '10px' }} />
-              <h1 style={{ margin: 0, fontSize: '28px' }}>Kashor</h1>
+              <h1 style={{ margin: 0, fontSize: '28px', letterSpacing: '-0.5px' }}>Kashor</h1>
               <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '6px' }}>Tracker portfela inwestycyjnego</p>
             </div>
 
@@ -467,7 +463,7 @@ export default function App() {
                     placeholder="twoj@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff', boxSizing: 'border-box' }}
+                    style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }}
                   />
                 </div>
               </div>
@@ -482,7 +478,7 @@ export default function App() {
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff', boxSizing: 'border-box' }}
+                    style={{ width: '100%', padding: '10px 10px 10px 40px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', boxSizing: 'border-box' }}
                   />
                 </div>
               </div>
@@ -499,7 +495,7 @@ export default function App() {
                   borderRadius: '8px',
                   border: 'none',
                   backgroundColor: '#38bdf8',
-                  color: '#0f172a',
+                  color: '#0b0f19',
                   fontWeight: 'bold',
                   cursor: 'pointer',
                   marginTop: '10px',
@@ -521,7 +517,7 @@ export default function App() {
                 onClick={handleGuestLogin}
                 style={{
                   backgroundColor: 'transparent',
-                  border: '1px dashed #475569',
+                  border: '1px dashed #334155',
                   color: '#38bdf8',
                   padding: '10px',
                   borderRadius: '8px',
@@ -540,7 +536,7 @@ export default function App() {
           </div>
         </div>
 
-        <footer style={{ textAlign: 'center', padding: '10px 0', color: '#64748b', fontSize: '12px' }}>
+        <footer style={{ textAlign: 'center', padding: '10px 0', color: '#475569', fontSize: '12px' }}>
           Kashor {APP_VERSION} | Ostatnia kompilacja: {BUILD_TIME}
         </footer>
       </div>
@@ -548,16 +544,21 @@ export default function App() {
   }
 
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', boxSizing: 'border-box' }}>
-      <div style={{ maxWidth: '1000px', margin: '0 auto', width: '100%' }}>
+    <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0b0f19', color: '#f8fafc', minHeight: '100vh', width: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+      
+      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%', padding: '24px 16px' }}>
         
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', borderBottom: '1px solid #334155', paddingBottom: '20px', flexWrap: 'wrap', gap: '15px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Wallet size={36} color="#38bdf8" />
+        {/* NAGŁÓWEK */}
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', borderBottom: '1px solid #1e293b', paddingBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{ backgroundColor: 'rgba(56, 189, 248, 0.1)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+              <Wallet size={32} color="#38bdf8" />
+            </div>
             <div>
-              <h1 style={{ margin: 0, fontSize: '28px', color: '#f8fafc' }}>Kashor</h1>
-              <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px' }}>
-                Status: <strong style={{ color: user ? '#22c55e' : '#eab308' }}>{user ? `Zalogowany (${user.email})` : 'Tryb Lokalny (Gość)'}</strong> | USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln ? `${usdPln.toFixed(4)} zł` : '...'}</strong>
+              <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', letterSpacing: '-0.5px', color: '#fff' }}>Kashor</h1>
+              <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span>Status: <strong style={{ color: user ? '#22c55e' : '#eab308' }}>{user ? `Zalogowany (${user.email})` : 'Tryb Lokalny (Gość)'}</strong></span>
+                <span>USD/PLN: <strong style={{ color: '#38bdf8' }}>{usdPln ? `${usdPln.toFixed(4)} zł` : '...'}</strong></span>
               </p>
             </div>
           </div>
@@ -565,19 +566,20 @@ export default function App() {
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <label
               style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 borderRadius: '8px',
-                border: '1px solid #334155',
-                backgroundColor: '#1e293b',
+                border: '1px solid rgba(34, 197, 94, 0.3)',
+                backgroundColor: 'rgba(34, 197, 94, 0.1)',
                 color: '#22c55e',
-                fontWeight: 'bold',
+                fontWeight: '600',
+                fontSize: '13px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
               }}
             >
-              <Upload size={18} /> Importuj z XTB (CSV)
+              <Upload size={16} /> Importuj z XTB (CSV)
               <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
 
@@ -585,12 +587,13 @@ export default function App() {
               onClick={refreshPrices}
               disabled={loading || holdings.length === 0}
               style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 borderRadius: '8px',
                 border: '1px solid #334155',
-                backgroundColor: '#1e293b',
+                backgroundColor: '#151d30',
                 color: '#38bdf8',
-                fontWeight: 'bold',
+                fontWeight: '600',
+                fontSize: '13px',
                 cursor: loading || holdings.length === 0 ? 'not-allowed' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -598,20 +601,21 @@ export default function App() {
                 opacity: holdings.length === 0 ? 0.5 : 1,
               }}
             >
-              <RefreshCw size={18} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-              {loading ? 'Odświeżanie...' : 'Odśwież kursy & nazwy'}
+              <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+              {loading ? 'Odświeżanie...' : 'Odśwież kursy'}
             </button>
 
             <button
               onClick={clearAllHoldings}
               disabled={holdings.length === 0}
               style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 borderRadius: '8px',
-                border: '1px solid #ef4444',
-                backgroundColor: '#1e293b',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
                 color: '#ef4444',
-                fontWeight: 'bold',
+                fontWeight: '600',
+                fontSize: '13px',
                 cursor: holdings.length === 0 ? 'not-allowed' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -619,100 +623,129 @@ export default function App() {
                 opacity: holdings.length === 0 ? 0.5 : 1,
               }}
             >
-              <Eraser size={18} /> Wyczyść portfel
+              <Eraser size={16} /> Wyczyść
             </button>
 
             <button
               onClick={handleLogout}
               style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 borderRadius: '8px',
-                border: '1px solid #475569',
-                backgroundColor: '#0f172a',
+                border: '1px solid #334155',
+                backgroundColor: '#0b0f19',
                 color: '#94a3b8',
-                fontWeight: 'bold',
+                fontWeight: '600',
+                fontSize: '13px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
               }}
             >
-              <LogOut size={18} /> {user ? 'Wyloguj' : 'Wyjdź'}
+              <LogOut size={16} /> {user ? 'Wyloguj' : 'Wyjdź'}
             </button>
           </div>
         </header>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px', marginBottom: '30px' }}>
-          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', border: '1px solid #334155' }}>
-            <span style={{ color: '#94a3b8', fontSize: '14px' }}>Wartość Portfela (PLN)</span>
-            <h2 style={{ margin: '8px 0 0', fontSize: '24px' }}>{totalValuePLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł</h2>
+        {/* KARTY PODSUMOWANIA */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+          <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+            <span style={{ color: '#64748b', fontSize: '13px', fontWeight: '500' }}>Wartość Portfela (PLN)</span>
+            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700', letterSpacing: '-0.5px' }}>{totalValuePLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł</h2>
           </div>
 
-          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', border: '1px solid #334155' }}>
-            <span style={{ color: '#94a3b8', fontSize: '14px' }}>Koszt Zakupu (PLN)</span>
-            <h2 style={{ margin: '8px 0 0', fontSize: '24px' }}>{totalCostPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł</h2>
+          <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+            <span style={{ color: '#64748b', fontSize: '13px', fontWeight: '500' }}>Koszt Zakupu (PLN)</span>
+            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700', letterSpacing: '-0.5px' }}>{totalCostPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł</h2>
           </div>
 
-          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', border: '1px solid #334155' }}>
-            <span style={{ color: '#94a3b8', fontSize: '14px' }}>Zysk / Strata całkowita</span>
-            <h2 style={{ margin: '8px 0 0', fontSize: '24px', color: totalProfitLossPLN >= 0 ? '#22c55e' : '#ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+            <span style={{ color: '#64748b', fontSize: '13px', fontWeight: '500' }}>Zysk / Strata całkowita</span>
+            <h2 style={{ margin: '8px 0 0', fontSize: '26px', fontWeight: '700', letterSpacing: '-0.5px', color: totalProfitLossPLN >= 0 ? '#22c55e' : '#ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
               {totalProfitLossPLN >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
               {totalProfitLossPLN >= 0 ? '+' : ''}{totalProfitLossPLN.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł ({totalProfitLossPercent.toFixed(2)}%)
             </h2>
           </div>
         </div>
 
+        {/* MODUŁ WYKRESU ALOKACJI DWRUKOLUMNOWY */}
         {holdings.length > 0 && (
-          <div style={{ backgroundColor: '#1e293b', padding: '24px', borderRadius: '12px', marginBottom: '30px', border: '1px solid #334155' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '15px' }}>
-              <PieChartIcon size={22} color="#38bdf8" />
-              <h3 style={{ margin: 0, fontSize: '18px' }}>Struktura i Alokacja Portfela</h3>
+          <div style={{ backgroundColor: '#151d30', padding: '24px', borderRadius: '16px', marginBottom: '28px', border: '1px solid #1e293b' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+              <PieChartIcon size={20} color="#38bdf8" />
+              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: '700' }}>Struktura i Alokacja Portfela</h3>
             </div>
             
-            <div style={{ height: '360px', width: '100%' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    cx="50%"
-                    cy="45%"
-                    innerRadius={65}
-                    outerRadius={105}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {chartData.map((_entry, index) => (
-                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} stroke="#1e293b" strokeWidth={2} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }}
-                    formatter={(value: any, name: any, item: any) => [
-                      `${Number(value).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł (${item.payload.percent}%)`,
-                      name
-                    ]}
-                  />
-                  <Legend verticalAlign="bottom" height={48} wrapperStyle={{ color: '#94a3b8', fontSize: '12px', paddingTop: '10px' }} />
-                </PieChart>
-              </ResponsiveContainer>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', alignItems: 'center' }}>
+              
+              {/* WYKRES KOŁOWY */}
+              <div style={{ height: '260px', width: '100%' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={rawChartData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={95}
+                      paddingAngle={2}
+                      dataKey="value"
+                    >
+                      {rawChartData.map((_entry, index) => (
+                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} stroke="#151d30" strokeWidth={2} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0b0f19', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc', fontSize: '13px' }}
+                      formatter={(value: any, _name: any, item: any) => [
+                        `${Number(value).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł (${item.payload.percentNum.toFixed(1)}%)`,
+                        item.payload.name
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* DEDYKOWANA, DOWOLNIE PRZEWIJANA LEGENDA Z PEŁNYMI NAZWAMI */}
+              <div style={{ maxHeight: '250px', overflowY: 'auto', paddingRight: '8px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {rawChartData.map((item, index) => (
+                    <div key={item.ticker} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#0b0f19', border: '1px solid #1e293b', fontSize: '13px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: CHART_COLORS[index % CHART_COLORS.length], flexShrink: 0 }} />
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: '700', color: '#fff' }}>{item.ticker}</span>
+                          <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>{item.name}</span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontWeight: '600', color: '#38bdf8' }}>{item.percentNum.toFixed(1)}%</div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>{item.value.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
             </div>
           </div>
         )}
 
-        <form onSubmit={addHolding} style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', marginBottom: '30px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #334155' }}>
+        {/* FORMULARZ DODAWANIA AKCJI */}
+        <form onSubmit={addHolding} style={{ backgroundColor: '#151d30', padding: '20px', borderRadius: '12px', marginBottom: '28px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #1e293b' }}>
           <input
             type="text"
             placeholder="Ticker (np. PKO.WA, AAPL)"
             value={ticker}
             onChange={(e) => setTicker(e.target.value)}
-            style={{ flex: 1, minWidth: '150px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
+            style={{ flex: 1, minWidth: '160px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
           />
           <input
             type="number"
             placeholder="Liczba akcji"
             value={shares}
             onChange={(e) => setShares(e.target.value)}
-            style={{ flex: 1, minWidth: '120px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
+            style={{ flex: 1, minWidth: '120px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
           />
           <input
             type="number"
@@ -720,69 +753,73 @@ export default function App() {
             placeholder="Cena zakupu"
             value={buyPrice}
             onChange={(e) => setBuyPrice(e.target.value)}
-            style={{ flex: 1, minWidth: '150px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
+            style={{ flex: 1, minWidth: '160px', padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: '#0b0f19', color: '#fff', fontSize: '14px' }}
           />
-          <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0f172a', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button type="submit" disabled={loading} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#38bdf8', color: '#0b0f19', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Plus size={18} /> Dodaj Akcję
           </button>
         </form>
 
-        <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', overflow: 'hidden', border: '1px solid #334155' }}>
+        {/* TABELA POSIADANYCH AKCJI */}
+        <div style={{ backgroundColor: '#151d30', borderRadius: '12px', overflow: 'hidden', border: '1px solid #1e293b', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}>
           {holdings.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
               Portfel jest pusty. Zaimportuj plik z XTB lub dodaj akcje ręcznie powyżej!
             </div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#334155', color: '#94a3b8', fontSize: '13px' }}>
-                  <th style={{ padding: '14px' }}>Symbol / Spółka</th>
-                  <th style={{ padding: '14px' }}>Ilość</th>
-                  <th style={{ padding: '14px' }}>Śr. cena zakupu</th>
-                  <th style={{ padding: '14px' }}>Aktualny kurs</th>
-                  <th style={{ padding: '14px' }}>Wartość (PLN)</th>
-                  <th style={{ padding: '14px' }}>Wynik (PLN)</th>
-                  <th style={{ padding: '14px', textAlign: 'center' }}>Akcja</th>
-                </tr>
-              </thead>
-              <tbody>
-                {holdings.map((h) => {
-                  const currencySymbol = h.currency === 'USD' ? '$' : 'zł';
-                  const holdingCostPLN = getPLNValue(h.shares * h.buyPrice, h.currency);
-                  const holdingValuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
-                  const profitLossPLN = holdingValuePLN - holdingCostPLN;
-                  const profitLossPercent = holdingCostPLN > 0 ? (profitLossPLN / holdingCostPLN) * 100 : 0;
-                  const isProfit = profitLossPLN >= 0;
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '650px' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#0b0f19', color: '#64748b', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    <th style={{ padding: '14px 18px' }}>Symbol / Spółka</th>
+                    <th style={{ padding: '14px 18px' }}>Ilość</th>
+                    <th style={{ padding: '14px 18px' }}>Śr. cena zakupu</th>
+                    <th style={{ padding: '14px 18px' }}>Aktualny kurs</th>
+                    <th style={{ padding: '14px 18px' }}>Wartość (PLN)</th>
+                    <th style={{ padding: '14px 18px' }}>Wynik (PLN)</th>
+                    <th style={{ padding: '14px 18px', textAlign: 'center' }}>Akcja</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {holdings.map((h) => {
+                    const currencySymbol = h.currency === 'USD' ? '$' : 'zł';
+                    const holdingCostPLN = getPLNValue(h.shares * h.buyPrice, h.currency);
+                    const holdingValuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
+                    const profitLossPLN = holdingValuePLN - holdingCostPLN;
+                    const profitLossPercent = holdingCostPLN > 0 ? (profitLossPLN / holdingCostPLN) * 100 : 0;
+                    const isProfit = profitLossPLN >= 0;
+                    const displayName = companyNames[h.ticker] || h.name || h.ticker;
 
-                  return (
-                    <tr key={h.id} style={{ borderBottom: '1px solid #334155' }}>
-                      <td style={{ padding: '14px' }}>
-                        <div style={{ fontWeight: 'bold', color: '#f8fafc' }}>{h.ticker}</div>
-                        <div style={{ fontSize: '12px', color: '#94a3b8' }}>{h.name || h.ticker}</div>
-                      </td>
-                      <td style={{ padding: '14px' }}>{h.shares}</td>
-                      <td style={{ padding: '14px' }}>{h.buyPrice.toFixed(2)} {currencySymbol}</td>
-                      <td style={{ padding: '14px' }}>{h.currentPrice.toFixed(2)} {currencySymbol}</td>
-                      <td style={{ padding: '14px' }}>{holdingValuePLN.toFixed(2)} zł</td>
-                      <td style={{ padding: '14px', color: isProfit ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
-                        {isProfit ? '+' : ''}{profitLossPLN.toFixed(2)} zł ({profitLossPercent.toFixed(2)}%)
-                      </td>
-                      <td style={{ padding: '14px', textAlign: 'center' }}>
-                        <button onClick={() => removeHolding(h.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
-                          <Trash2 size={18} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                    return (
+                      <tr key={h.id} style={{ borderBottom: '1px solid #1e293b' }}>
+                        <td style={{ padding: '14px 18px' }}>
+                          <div style={{ fontWeight: '700', color: '#fff', fontSize: '14px' }}>{h.ticker}</div>
+                          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>{displayName}</div>
+                        </td>
+                        <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.shares}</td>
+                        <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.buyPrice.toFixed(2)} {currencySymbol}</td>
+                        <td style={{ padding: '14px 18px', fontSize: '14px' }}>{h.currentPrice.toFixed(2)} {currencySymbol}</td>
+                        <td style={{ padding: '14px 18px', fontSize: '14px', fontWeight: '600' }}>{holdingValuePLN.toFixed(2)} zł</td>
+                        <td style={{ padding: '14px 18px', fontSize: '14px', color: isProfit ? '#22c55e' : '#ef4444', fontWeight: '700' }}>
+                          {isProfit ? '+' : ''}{profitLossPLN.toFixed(2)} zł ({profitLossPercent.toFixed(2)}%)
+                        </td>
+                        <td style={{ padding: '14px 18px', textAlign: 'center' }}>
+                          <button onClick={() => removeHolding(h.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}>
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
       </div>
 
-      <footer style={{ textAlign: 'center', padding: '20px 0 10px', color: '#64748b', fontSize: '12px' }}>
+      <footer style={{ textAlign: 'center', padding: '20px 0', color: '#475569', fontSize: '12px', borderTop: '1px solid #1e293b', marginTop: '40px' }}>
         Kashor {APP_VERSION} | Ostatnia kompilacja: {BUILD_TIME}
       </footer>
     </div>
