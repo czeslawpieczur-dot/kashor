@@ -14,8 +14,8 @@ import { fetchStockPriceAndName, fetchNbpRates } from './services/apiService';
 import { AllocationChart } from './components/AllocationChart';
 import { CurrencyModal } from './components/CurrencyModal';
 
-const APP_VERSION = 'v2.3.0';
-const BUILD_TIME = '2026-10-06 23:45';
+const APP_VERSION = 'v2.3.1';
+const BUILD_TIME = '2026-10-06 23:55';
 
 const CHART_COLORS = [
   '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
@@ -305,6 +305,7 @@ export default function App() {
     setLoading(false);
   };
 
+  // KRYTYCZNA ZMIANA: Bezpieczne pobieranie cen po kolei (omija limity anty-DDoS Yahoo/AllOrigins)
   const refreshPrices = async () => {
     if (holdings.length === 0) return;
     setLoading(true);
@@ -312,28 +313,43 @@ export default function App() {
 
     await refreshExchangeRates();
 
-    const updatedHoldings = await Promise.all(
-      holdings.map(async (item) => {
-        const stockData = await fetchStockPriceAndName(item.ticker, item.name);
-        if (stockData.price !== null) successCount++;
-        
-        const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
+    // Wyciągamy unikalne tickery z całego portfela
+    const uniqueTickers = Array.from(new Set(holdings.map(h => h.ticker)));
+    const pricesMap: Record<string, any> = {};
 
-        if (user) {
-          await supabase
-            .from('holdings')
-            .update({ current_price: newPrice, currency: stockData.currency, name: item.name })
-            .eq('id', item.id)
-            .eq('user_id', user.id);
-        }
+    // Pobieramy sekwencyjnie z 250ms pauzą, aby nie zablokowano nas za spam
+    for (const ticker of uniqueTickers) {
+      const fallbackName = holdings.find(h => h.ticker === ticker)?.name;
+      const stockData = await fetchStockPriceAndName(ticker, fallbackName);
+      
+      pricesMap[ticker] = stockData;
+      if (stockData.price !== null) successCount++;
+      
+      // Delikatne opóźnienie
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
 
-        return {
-          ...item,
-          currentPrice: newPrice,
-          currency: stockData.currency,
-        };
-      })
-    );
+    const updatedHoldings = holdings.map((item) => {
+      const stockData = pricesMap[item.ticker];
+      const newPrice = stockData.price !== null ? stockData.price : item.currentPrice;
+
+      return {
+        ...item,
+        currentPrice: newPrice,
+        currency: stockData.currency || item.currency,
+      };
+    });
+
+    if (user) {
+      // Zapisujemy nowe ceny w bazie po kolei
+      for (const item of updatedHoldings) {
+        await supabase
+          .from('holdings')
+          .update({ current_price: item.currentPrice, currency: item.currency })
+          .eq('id', item.id)
+          .eq('user_id', user.id);
+      }
+    }
 
     setHoldings(updatedHoldings);
     setLoading(false);
@@ -341,7 +357,7 @@ export default function App() {
     if (successCount === 0) {
       alert('Nie udało się pobrać aktualnych kursów z serwerów giełdowych. Spróbuj ponownie za chwilę.');
     } else {
-      alert(`Pomyślnie zaktualizowano kursy z giełdy! (Zaktualizowano ${successCount} pozycji)`);
+      alert(`Pomyślnie zaktualizowano kursy z giełdy! (Zaktualizowano ${successCount} unikalnych spółek)`);
     }
   };
 
@@ -474,6 +490,8 @@ export default function App() {
                 price: stockData.price !== null ? stockData.price : price,
                 currency: stockData.currency
               };
+              // KRYTYCZNA ZMIANA: Pauza przy imporcie zapobiegająca blokadzie API
+              await new Promise(resolve => setTimeout(resolve, 250));
             } catch (err) {
               const meta = getMetaBySymbol(rawTicker);
               apiCache[rawTicker] = {
@@ -603,21 +621,6 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
-  const rawChartData = holdings.map((h) => {
-    const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
-    return {
-      ticker: h.ticker,
-      name: h.name,
-      value: parseFloat(valuePLN.toFixed(2)),
-      percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
-    };
-  }).sort((a, b) => b.value - a.value);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortOrder('desc'); }
-  };
-
   const groupedHoldingsList = useMemo(() => {
     const map = new Map();
     holdings.forEach(h => {
@@ -644,6 +647,22 @@ export default function App() {
       avgBuyPrice: g.totalShares > 0 ? g.totalCostOrig / g.totalShares : 0
     }));
   }, [holdings]);
+
+  // KRYTYCZNA ZMIANA: Wykres Alokacji pobiera teraz dane ZGRUPOWANE (tylko główne wiersze)
+  const rawChartData = groupedHoldingsList.map((g) => {
+    const valuePLN = getPLNValue(g.totalShares * g.currentPrice, g.currency);
+    return {
+      ticker: g.ticker,
+      name: g.name,
+      value: parseFloat(valuePLN.toFixed(2)),
+      percentNum: totalValuePLN > 0 ? (valuePLN / totalValuePLN) * 100 : 0,
+    };
+  }).sort((a, b) => b.value - a.value);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortOrder('desc'); }
+  };
 
   const sortedGroupedHoldings = [...groupedHoldingsList].sort((a, b) => {
     const aVal = getPLNValue(a.totalShares * a.currentPrice, a.currency);
