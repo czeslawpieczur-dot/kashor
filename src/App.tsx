@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck } from 'lucide-react';
+import { TrendingUp, TrendingDown, Plus, Wallet, Trash2, RefreshCw, Upload, Eraser, LogOut, Lock, Mail, UserCheck, PieChart as PieChartIcon } from 'lucide-react';
 import Papa from 'papaparse';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { supabase } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 
 // WERSJONOWANIE APLIKACJI
-const APP_VERSION = 'v1.1.1';
-const BUILD_TIME = '2026-10-06 14:26';
+const APP_VERSION = 'v1.2.0';
+const BUILD_TIME = '2026-10-06 14:59';
 
 interface Holding {
   id: string;
@@ -16,6 +17,11 @@ interface Holding {
   currentPrice: number;
   currency: string;
 }
+
+const CHART_COLORS = [
+  '#38bdf8', '#22c55e', '#eab308', '#f97316', '#a855f7',
+  '#ec4899', '#06b6d4', '#10b981', '#f43f5e', '#6366f1'
+];
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -395,6 +401,16 @@ export default function App() {
   const totalProfitLossPLN = totalValuePLN - totalCostPLN;
   const totalProfitLossPercent = totalCostPLN > 0 ? (totalProfitLossPLN / totalCostPLN) * 100 : 0;
 
+  // DANE DLA WYKRESU KOŁOWEGO
+  const chartData = holdings.map((h) => {
+    const valuePLN = getPLNValue(h.shares * h.currentPrice, h.currency);
+    return {
+      name: h.ticker,
+      value: parseFloat(valuePLN.toFixed(2)),
+      percent: totalValuePLN > 0 ? ((valuePLN / totalValuePLN) * 100).toFixed(1) : '0',
+    };
+  }).sort((a, b) => b.value - a.value);
+
   if (authLoading) {
     return (
       <div style={{ backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -621,6 +637,44 @@ export default function App() {
             </h2>
           </div>
         </div>
+
+        {/* MODUŁ WYKRESU ALOKACJI PORTFELA */}
+        {holdings.length > 0 && (
+          <div style={{ backgroundColor: '#1e293b', padding: '24px', borderRadius: '12px', marginBottom: '30px', border: '1px solid #334155' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '15px' }}>
+              <PieChartIcon size={22} color="#38bdf8" />
+              <h3 style={{ margin: 0, fontSize: '18px' }}>Struktura i Alokacja Portfela</h3>
+            </div>
+            
+            <div style={{ height: '320px', width: '100%' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={chartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={100}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {chartData.map((_entry, index) => (
+                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} stroke="#1e293b" strokeWidth={2} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }}
+                    formatter={(value: any, name: any, item: any) => [
+                      `${Number(value).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} zł (${item.payload.percent}%)`,
+                      name
+                    ]}
+                  />
+                  <Legend verticalAlign="bottom" height={36} wrapperStyle={{ color: '#94a3b8', fontSize: '13px' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={addHolding} style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '12px', marginBottom: '30px', display: 'flex', gap: '12px', flexWrap: 'wrap', border: '1px solid #334155' }}>
           <input
